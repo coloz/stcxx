@@ -575,6 +575,55 @@ def normalize_cbe_u24_negation(payload: str) -> tuple[str, int]:
     return rewritten, count
 
 
+def normalize_cbe_u32_power_of_two_division(
+    payload: str,
+) -> tuple[str, list[dict[str, object]]]:
+    """Lower CBE's u32 division/remainder by powers of two explicitly.
+
+    LLVM-CBE deliberately keeps integer operations in small inline helpers.
+    At ``-O0`` SDCC MCS251 can therefore lower a constant divisor through its
+    generic 32-bit division runtime instead of selecting a shift or mask.  In
+    particular, ArduinoJson's second memory-pool ID uses ``/ 256`` and
+    ``% 256``; the lowered division produces the wrong pool index on the
+    qualified target, which later prevents document traversal from terminating.
+
+    Restrict this semantics-preserving normalization to the exact CBE call
+    shape with a numeric SSA temporary and an unsigned-32 helper.  Other
+    expressions and non-power-of-two divisors remain untouched, so this pass
+    cannot duplicate side effects or silently broaden the accepted C shape.
+    """
+
+    call_pattern = re.compile(
+        r"\bllvm_(?P<operation>udiv|urem)_u32\("
+        r"(?P<dividend>_[0-9]+),\s*"
+        r"(?P<divisor>(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:[uUlL]{0,2}))\)"
+    )
+    rewrites: list[dict[str, object]] = []
+
+    def rewrite(match: re.Match[str]) -> str:
+        literal = match.group("divisor")
+        digits = literal.rstrip("uUlL")
+        divisor = int(digits, 0)
+        if (divisor < 1 or divisor > 0x80000000 or
+                divisor & (divisor - 1)):
+            return match.group(0)
+
+        shift = divisor.bit_length() - 1
+        dividend = match.group("dividend")
+        operation = match.group("operation")
+        rewrites.append({
+            "operation": operation,
+            "divisor": divisor,
+            "shift": shift,
+        })
+        if operation == "udiv":
+            return f"(((uint32_t){dividend}) >> {shift}u)"
+        mask = divisor - 1
+        return f"(((uint32_t){dividend}) & {mask}UL)"
+
+    return call_pattern.sub(rewrite, payload), rewrites
+
+
 def decode_cbe_byte_string(contents: str) -> list[int]:
     """Decode the restricted C string spelling emitted for LLVM i8 arrays."""
 
@@ -910,6 +959,9 @@ def audit_and_adapt_cbe(
         normalize_cbe_function_typedefs(payload)
     )
     payload, u24_negation_helpers_repaired = normalize_cbe_u24_negation(payload)
+    payload, u32_power_of_two_division_rewrites = (
+        normalize_cbe_u32_power_of_two_division(payload)
+    )
     payload, generic_array_roundtrips = normalize_cbe_address_roundtrips(payload)
     payload, exact_byte_arrays_rewritten = (
         normalize_cbe_exact_byte_array_initializers(payload)
@@ -1001,6 +1053,9 @@ typedef unsigned char bool;
         ),
         "generic_array_address_roundtrips_normalized": generic_array_roundtrips,
         "u24_negation_helpers_repaired": u24_negation_helpers_repaired,
+        "u32_power_of_two_division_rewrites": (
+            u32_power_of_two_division_rewrites
+        ),
         "exact_byte_array_initializers_rewritten": exact_byte_arrays_rewritten,
         "stateless_struct_returns_initialized": stateless_struct_returns_initialized,
         "single_block_pointer_temporaries_eliminated": single_block_pointer_temporaries_eliminated,
@@ -1015,6 +1070,7 @@ typedef unsigned char bool;
             "map two audited unreachable abstract-base traps to runtime panic",
             "sort the dedicated LLVM-CBE l_fptr typedef block by numeric alias",
             "repair the pinned CBE i24 negation helper with modulo-2^24 semantics",
+            "lower audited u32 division/remainder by powers of two to shifts/masks",
             "rewrite exact-length LLVM i8 string initializers as numeric byte arrays",
             "zero-initialize synthetic storage returned for audited stateless C++ tags",
             "eliminate audited same-basic-block CBE pointer temporaries",

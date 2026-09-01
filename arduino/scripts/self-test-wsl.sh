@@ -13,7 +13,10 @@ mkdir -p "${pycache}"
 PYTHONPYCACHEPREFIX="${pycache}" python3 -m py_compile \
   "${repo_root}/arduino/bridge/audit_and_adapt.py" \
   "${repo_root}/arduino/bridge/adapt.py" \
+  "${repo_root}/arduino/tests/check-bridge-adapter.py" \
   "${repo_root}/arduino/tests/check_sdcc_big_endian_narrowing.py"
+
+python3 "${repo_root}/arduino/tests/check-bridge-adapter.py"
 
 if test -x "${build_root}/clang/bin/clang"; then
   python3 "${repo_root}/arduino/tests/check-clang-target.py" \

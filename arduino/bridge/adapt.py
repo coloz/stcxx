@@ -275,6 +275,9 @@ def adapt_cbe(
     )
     payload, typedefs_before, typedefs_after = shared.normalize_cbe_function_typedefs(payload)
     payload, u24_negation_helpers_repaired = shared.normalize_cbe_u24_negation(payload)
+    payload, u32_power_of_two_division_rewrites = (
+        shared.normalize_cbe_u32_power_of_two_division(payload)
+    )
     payload, pointer_rewrites = shared.normalize_cbe_address_roundtrips(payload)
     payload, exact_byte_arrays_rewritten = (
         shared.normalize_cbe_exact_byte_array_initializers(payload)
@@ -332,6 +335,9 @@ typedef unsigned char bool;
         "function_typedef_order_before": typedefs_before,
         "function_typedef_order_after": typedefs_after,
         "u24_negation_helpers_repaired": u24_negation_helpers_repaired,
+        "u32_power_of_two_division_rewrites": (
+            u32_power_of_two_division_rewrites
+        ),
         "select_helpers_initialized": select_helpers_initialized,
         "unconditional_helpers_initialized": unconditional_helpers_initialized,
         "floating_comparison_helpers_preserved": fcmp_helper_names,

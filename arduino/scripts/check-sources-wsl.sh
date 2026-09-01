@@ -25,8 +25,9 @@ check_sha d9c5a79a1f949a023c93d38bfd4df9ee2bdd1b3882d5c016820721134b85e7e9 "${sd
 check_sha 42a6a91ba0f8803c22d266862a5e34293929a142314511d760dfc51a177e6715 "${clang_patch}"
 check_sha b7a1b7b0af7b9c7596af6bd46e36d11321926eaa66a7a7dc957ab0a1375ee4b0 "${repo_root}/arduino/sources/clang-20.1.8.src.tar.xz"
 check_sha 3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634 "${repo_root}/arduino/sources/cmake-20.1.8.src.tar.xz"
-check_sha 37ee94f8b812b81c93f86feb53f816a62725ff27a5b2cfeedf31c40df48dabbb "${repo_root}/arduino/bridge/audit_and_adapt.py"
-check_sha dfadd308e08370c92c0c075b5069b77bf9bbfee632504b6f0af9c872391105a0 "${repo_root}/arduino/bridge/adapt.py"
+check_sha 03843d144e0786a1eb5443e79b6ef4852c86de36b8927e27f27f75095dc0d41d "${repo_root}/arduino/bridge/audit_and_adapt.py"
+check_sha 611ec7be522cfa052e2c190151630e020be5fd73ef5aa8dc903103dfb591031c "${repo_root}/arduino/bridge/adapt.py"
+check_sha c809a13ae0a5611850165a8dec56fbe5dd634dee6c2ee8bafebd16d8f31aa006 "${repo_root}/arduino/tests/check-bridge-adapter.py"
 
 git -C "${repo_root}" cat-file -e "${base_commit}^{commit}"
 git -C "${repo_root}" apply --reverse --check "${sdcc_combined_patch}"
