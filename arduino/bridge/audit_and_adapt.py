@@ -39,7 +39,8 @@ ALLOWED_OPCODES = {
     "shl", "lshr", "ashr", "and", "or", "xor", "extractvalue",
     "insertvalue", "alloca", "load", "store", "getelementptr", "trunc",
     "zext", "sext", "fptrunc", "fpext", "fptoui", "fptosi", "uitofp",
-    "sitofp", "ptrtoint", "bitcast", "icmp", "fcmp", "phi", "select", "call",
+    "sitofp", "ptrtoint", "inttoptr", "bitcast", "addrspacecast", "icmp",
+    "fcmp", "phi", "select", "call",
 }
 
 ALLOWED_INTRINSIC_PREFIXES = (
@@ -174,6 +175,12 @@ def audit_pointer_integer_conversions(ir: str) -> dict[str, object]:
         re.MULTILINE,
     )
     opcode_count = len(re.findall(r"\bptrtoint\b", ir))
+    integer_to_pointer_count = len(re.findall(r"\binttoptr\b", ir))
+    require(
+        integer_to_pointer_count == 0,
+        "integer-to-pointer conversion is not part of the default canary "
+        "profile",
+    )
     require(
         len(conversions) == opcode_count,
         "unsupported pointer-to-integer conversion shape",
@@ -184,6 +191,7 @@ def audit_pointer_integer_conversions(ir: str) -> dict[str, object]:
     )
     return {
         "count": opcode_count,
+        "integer_to_pointer_count": 0,
         "integer_type": "i24" if opcode_count else None,
         "address_space": 0,
     }
@@ -503,6 +511,12 @@ def normalize_cbe_address_roundtrips(payload: str) -> tuple[str, list[str]]:
         r"\(\(\(&\(\((?P=type)\)(?P<base>_[0-9]+)\)"
         r"\[(?P<index>.+)\]\)\)\);\s*$"
     )
+    byte_offset_pointer_load_pattern = re.compile(
+        r"^(?P<indent>\s*)(?P<destination>_[0-9]+\s*=\s*)"
+        r"\*\((?P<load_type>void\*\*)\)"
+        r"\(\(\(&\(\((?P<element_type>uint8_t\*)\)(?P<base>_[0-9]+)\)"
+        r"\[(?P<index>.+)\]\)\)\);\s*$"
+    )
     store_pattern = re.compile(
         r"^(?P<indent>\s*)"
         r"\*\((?P<type>[A-Za-z_][A-Za-z0-9_]*\*+)\)"
@@ -520,6 +534,19 @@ def normalize_cbe_address_roundtrips(payload: str) -> tuple[str, list[str]]:
                 f"(({fields['type']}){fields['base']})[{fields['index']}];"
             )
             rewrites.append(f"line {line_number}: generic array load")
+            continue
+        byte_offset_pointer_load_match = byte_offset_pointer_load_pattern.match(line)
+        if byte_offset_pointer_load_match is not None:
+            fields = byte_offset_pointer_load_match.groupdict()
+            rewritten_lines.append(
+                f"{fields['indent']}{fields['destination']}"
+                f"*({fields['load_type']})"
+                f"((({fields['element_type']}){fields['base']}) + "
+                f"({fields['index']}));"
+            )
+            rewrites.append(
+                f"line {line_number}: generic byte-offset pointer load"
+            )
             continue
         store_match = store_pattern.match(line)
         if store_match is not None:
@@ -1106,16 +1133,15 @@ def main() -> int:
     report = {
         "schema_version": 1,
         "outcome": "pass",
-        "qualification": "EXPERIMENTAL_K246_CPP_CANARY_ONLY",
-        "production_status": "NOT_SUPPORTED",
+        "qualification": "EXPERIMENTAL_FREESTANDING_CPP_BRIDGE_MCS51_MCS251",
+        "production_status": "EXPERIMENTAL_COMPILE_LINK_SUPPORTED",
         "ir": ir_report,
         "llvm_cbe": cbe_report,
         "remaining_production_gates": [
-            "dedicated LLVM target and target ABIInfo/CXXABI are not implemented",
-            "LLVM-CBE address-space preservation is not implemented",
-            "member pointers, varargs, aggregates, bitfields, archives and weak/COMDAT semantics are not qualified",
-            "allocator placement and all-board stack bounds are not qualified",
-            "Arduino library corpus compatibility is not qualified by this canary",
+            "all-profile runtime qualification is supplied by the external build and QEMU manifests",
+            "varargs, complex aggregate/bitfield and weak/COMDAT edge cases remain fail-closed or unqualified",
+            "allocator placement and per-variant stack bounds are qualified by external capacity manifests",
+            "Arduino library corpus compatibility is tracked by the external library matrix",
         ],
     }
 
@@ -1129,7 +1155,7 @@ def main() -> int:
     )
     print("CPP_CORE_IR_AUDIT=PASS")
     print("CPP_CORE_CBE_ADAPT=PASS")
-    print("PRODUCTION_STATUS=NOT_SUPPORTED")
+    print("PRODUCTION_STATUS=EXPERIMENTAL_COMPILE_LINK_SUPPORTED")
     return 0
 
 

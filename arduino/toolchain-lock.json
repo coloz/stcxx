@@ -1,8 +1,8 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "project": "arduino-stc51-experimental-cpp-toolchain",
-  "qualification": "experimental-freestanding-cpp-bridge",
-  "production_status": "NOT_SUPPORTED",
+  "qualification": "experimental-freestanding-cpp-bridge-mcs51-mcs251",
+  "production_status": "EXPERIMENTAL_COMPILE_LINK_SUPPORTED",
   "clang": {
     "repository": "https://github.com/llvm/llvm-project.git",
     "tag": "llvmorg-20.1.8",
@@ -13,13 +13,31 @@
     "cmake_archive": "arduino/sources/cmake-20.1.8.src.tar.xz",
     "cmake_archive_sha256": "3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634",
     "patch": "arduino/patches/clang-20.1.8-stcsdcc-ir-only.patch",
-    "patch_sha256": "42a6a91ba0f8803c22d266862a5e34293929a142314511d760dfc51a177e6715",
-    "reference_binary_sha256": "3443099d752546b74cb791eec05e721411ddd39c63a22ea72a2a44b8b65097c7"
+    "patch_sha256": "97f1fd8a824e583456e3335935125a712b05f2b25613c6a352e2c7b3b8c68dcc",
+    "reference_binary_sha256": "3443099d752546b74cb791eec05e721411ddd39c63a22ea72a2a44b8b65097c7",
+    "reference_shared_library_sha256": "c7ea6e39bd361eb590725011086d5b37124ab5c77b3b1244040f351ff260a152",
+    "patched_source_normalized_sha256": {
+      "include/clang/Basic/TargetInfo.h": "f317ced88d01c724ae9aa173d9821fb13c029d8993722eb0bb185bb2a0058fdc",
+      "lib/AST/ASTContext.cpp": "0b272f62782f8d6cb52ccdf1f17682e2958ec1cf4f91a75e63d1f2bfe5997175",
+      "lib/AST/ItaniumCXXABI.cpp": "17b7eca39815b2993220362ed583a07db98f36e76a311052f0eb6f0e2dfad82c",
+      "lib/Basic/Targets/MSP430.cpp": "8650ce2fb14da7f7f6d72e49297ed34a99843834bfc7d3b1cc082ef7c02eb83a",
+      "lib/Basic/Targets/MSP430.h": "a9458b753247049fe2b3b9cab2b9c88eb0e24af87658f82d494281fc4ab2a38a",
+      "lib/CodeGen/BackendUtil.cpp": "5390b53f2a35534b5c65b0aa3c93c5d294de43922567718636e0930ff4f68c39",
+      "lib/CodeGen/ItaniumCXXABI.cpp": "16463dc026b78539a629e67dada35d2af233d1c6d93ea15220455b3803d3a899",
+      "lib/Driver/ToolChains/Clang.cpp": "2e53d79ee3d3c23ee3f792c5d21fe0dcdf7e41f1214141a7cca0e927241f4f56"
+    },
+    "dual_target_regression": "arduino/tests/check-stc-cpp-targets.py",
+    "dual_target_regression_sha256": "7c1af48a2c4569dc69ede3593aec6ac71b9b491b74c68837d3e79fc19e9c035a"
   },
   "llvm_cbe": {
     "repository": "https://github.com/JuliaHubOSS/llvm-cbe.git",
     "commit": "83f1bea66c7415c701925470a2f7596b37153197",
-    "reference_binary_sha256": "7930b055c3c47ccd496885e6fd20245e257228b742efb73235cecf976a53834b"
+    "patch": "arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch",
+    "patch_sha256": "6a3e793f69ffdde98495935103545eebbeebdecb5edc3b853c341639199802ac",
+    "patched_cbackend_normalized_sha256": "4646930a0edf0d33845c9770af7c4fa8946d48822ec000b5bee3fff3e746045c",
+    "reference_binary_sha256": "6bfac68b2c8f25b1a4660194e61f16b7251e56d8443c4610583e4f76f9d95229",
+    "regression": "arduino/tests/cbe/run-stc-regressions.sh",
+    "regression_sha256": "f87cb48a95d6dae43ffba6cfbde9a73298e28feca254f8176b7cc48fadbd2c81"
   },
   "sdcc": {
     "repository": "https://github.com/gevico/sdcc-c251.git",
@@ -50,26 +68,38 @@
   },
   "bridge": {
     "shared_adapter": "arduino/bridge/audit_and_adapt.py",
-    "shared_adapter_sha256": "03843d144e0786a1eb5443e79b6ef4852c86de36b8927e27f27f75095dc0d41d",
+    "shared_adapter_sha256": "89c9a5adb165c32106e80f4e663e10c4532e1d28ce3b674356bd909878e7c7b1",
     "cli_adapter": "arduino/bridge/adapt.py",
-    "cli_adapter_sha256": "611ec7be522cfa052e2c190151630e020be5fd73ef5aa8dc903103dfb591031c",
+    "cli_adapter_sha256": "9980df2cd3d8805b33cd6aa1266984658a7e7f0676a24d47fbb6f6a82b0e7bb0",
     "regression": "arduino/tests/check-bridge-adapter.py",
     "regression_sha256": "c809a13ae0a5611850165a8dec56fbe5dd634dee6c2ee8bafebd16d8f31aa006"
   },
   "profiles": {
     "mcs251": {
-      "status": "EXPERIMENTAL_IR_ONLY",
+      "status": "EXPERIMENTAL_ARDUINO_COMPILE_LINK",
       "target_triple": "msp430-stc-none-eabi",
       "data_layout": "E-m:e-p:24:8-i8:8-i16:8-i32:8-i64:8-i128:8-f32:8-f64:8-f128:8-a:8-n8:16:32-S8",
-      "abi_identity_symbol": "__stcxx_abi_stc_arduino_cxx_v1_mcs251_be_size4_pdiff4_ptr3_fnptr3_guard2"
+      "abi_identity_symbol": "__stcxx_abi_stc_arduino_cxx_v1_mcs251_be_size4_pdiff4_ptr3_fnptr3_guard1_direct",
+      "ordinary_function_pointer_bytes": 3,
+      "data_member_pointer_bytes": 3,
+      "method_member_pointer_bytes": 6,
+      "member_pointer_codegen_integer_bits": 24
     },
     "mcs51": {
-      "status": "FRONTEND_ABI_NOT_IMPLEMENTED",
+      "status": "EXPERIMENTAL_ARDUINO_COMPILE_LINK",
+      "target_triple": "msp430-stc51-none-eabi",
+      "data_layout": "e-m:e-p:24:8-p1:16:8-P1-i8:8-i16:8-i32:8-i64:8-i128:8-f32:8-f64:8-f128:8-a:8-n8:16:32-S8",
+      "abi_identity_symbol": "__stcxx_abi_stc_arduino_cxx_v1_mcs51_le_size2_pdiff4_gptr3_fnptr2_guard1_direct",
       "required_byte_order": "little",
       "required_size_t_bits": 16,
       "required_ptrdiff_t_bits": 32,
       "required_generic_data_pointer_bits": 24,
-      "required_function_pointer_bits": 16
+      "required_function_pointer_bits": 16,
+      "ordinary_function_pointer_bytes": 2,
+      "data_member_pointer_bytes": 2,
+      "method_member_pointer_bytes": 4,
+      "member_pointer_codegen_integer_bits": 16,
+      "member_call_program_address_space": 1
     }
   }
 }

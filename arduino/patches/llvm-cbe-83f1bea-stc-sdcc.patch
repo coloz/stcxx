@@ -1,0 +1,166 @@
+diff --git a/lib/Target/CBackend/CBackend.cpp b/lib/Target/CBackend/CBackend.cpp
+index f0056bc..9db97dc 100644
+--- a/lib/Target/CBackend/CBackend.cpp
++++ b/lib/Target/CBackend/CBackend.cpp
+@@ -291,7 +291,12 @@ raw_ostream &CWriter::printTypeString(raw_ostream &Out, Type *Ty,
+   }
+ 
+   if (Ty->isPointerTy()) {
+-    return Out << "ptr";
++    auto *PT = cast<PointerType>(Ty);
++    unsigned ProgramAS =
++        TheModule ? TheModule->getDataLayout().getProgramAddressSpace() : 0;
++    return Out << ((ProgramAS != 0 && PT->getAddressSpace() == ProgramAS)
++                       ? "program_ptr"
++                       : "ptr");
+   }
+ 
+   switch (Ty->getTypeID()) {
+@@ -520,6 +525,16 @@ raw_ostream &CWriter::printSimpleType(raw_ostream &Out, Type *Ty,
+       return Out << (isSigned ? "int8_t" : "uint8_t");
+     else if (NumBits <= 16)
+       return Out << (isSigned ? "int16_t" : "uint16_t");
++    else if (NumBits == 24 && TheModule &&
++             (TheModule->getTargetTriple() == "msp430-stc-none-eabi" ||
++              TheModule->getTargetTriple() == "msp430-stc51-none-eabi"))
++      // SDCC implements C23 _BitInt with exact byte storage.  Keeping i24 as
++      // a 24-bit C object is required for the STC MCS251 pointer and C++
++      // member-pointer layouts; widening it to uint32_t changes struct and
++      // array strides even when arithmetic results are masked afterwards.
++      // Keep generic llvm-cbe output unchanged: only the two locked synthetic
++      // STC IR-only triples opt into this SDCC-specific representation.
++      return Out << (isSigned ? "signed" : "unsigned") << " _BitInt(24)";
+     else if (NumBits <= 32)
+       return Out << (isSigned ? "int32_t" : "uint32_t");
+     else if (NumBits <= 64)
+@@ -582,6 +597,11 @@ CWriter::printTypeName(raw_ostream &Out, Type *Ty, bool isSigned,
+   }
+ 
+   case Type::PointerTyID: {
++    auto *PT = cast<PointerType>(Ty);
++    unsigned ProgramAS =
++        TheModule ? TheModule->getDataLayout().getProgramAddressSpace() : 0;
++    if (ProgramAS != 0 && PT->getAddressSpace() == ProgramAS)
++      return Out << "llvm_cbe_program_pointer";
+     return Out << "void*";
+   }
+ 
+@@ -1071,6 +1091,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
+   case Instruction::IntToPtr:
+   case Instruction::Trunc:
+   case Instruction::BitCast:
++  case Instruction::AddrSpaceCast:
+   case Instruction::FPExt:
+   case Instruction::FPTrunc: // For these the DstTy sign doesn't matter
+     Out << '(';
+@@ -1115,6 +1136,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
+     break;
+   case Instruction::Trunc:
+   case Instruction::BitCast:
++  case Instruction::AddrSpaceCast:
+   case Instruction::FPExt:
+   case Instruction::FPTrunc:
+   case Instruction::FPToSI:
+@@ -1136,6 +1158,23 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+       errorWithMessage("Unsupported constant type");
+     }
+     switch (CE->getOpcode()) {
++    case Instruction::AddrSpaceCast: {
++      auto *SourcePointer = dyn_cast<PointerType>(CE->getOperand(0)->getType());
++      auto *DestinationPointer = dyn_cast<PointerType>(CE->getType());
++      unsigned ProgramAS = TheModule->getDataLayout().getProgramAddressSpace();
++      if (ProgramAS != 0 && SourcePointer && DestinationPointer &&
++          SourcePointer->getAddressSpace() == ProgramAS &&
++          DestinationPointer->getAddressSpace() == 0 &&
++          isa<Function>(CE->getOperand(0))) {
++        // SDCC's MCS51 large model accepts a function designator converted
++        // directly to a generic pointer as a static initializer.  Routing it
++        // through a function-pointer cast first makes the otherwise equivalent
++        // initializer non-constant and breaks C++ virtual tables.
++        Out << "((void*)" << GetValueName(CE->getOperand(0)) << ')';
++        return;
++      }
++      [[fallthrough]];
++    }
+     case Instruction::Trunc:
+     case Instruction::ZExt:
+     case Instruction::SExt:
+@@ -1170,7 +1209,9 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+     case Instruction::GetElementPtr:
+       Out << "(";
+       printGEPExpression(CE->getOperand(0), CPV->getNumOperands(),
+-                         gep_type_begin(CPV), gep_type_end(CPV));
++                         gep_type_begin(CPV), gep_type_end(CPV),
++                         std::optional(cast<GEPOperator>(CE)
++                                           ->getSourceElementType()));
+       Out << ")";
+       return;
+     case Instruction::Select:
+@@ -1560,7 +1601,13 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+ 
+   case Type::PointerTyID:
+     if (isa<ConstantPointerNull>(CPV)) {
+-      Out << "((void*)/*NULL*/0)";
++      auto *PT = cast<PointerType>(CPV->getType());
++      unsigned ProgramAS =
++          TheModule ? TheModule->getDataLayout().getProgramAddressSpace() : 0;
++      if (ProgramAS != 0 && PT->getAddressSpace() == ProgramAS)
++        Out << "((llvm_cbe_program_pointer)/*NULL*/0)";
++      else
++        Out << "((void*)/*NULL*/0)";
+       break;
+     } else if (GlobalValue *GV = dyn_cast<GlobalValue>(CPV)) {
+       writeOperand(GV);
+@@ -1613,6 +1660,7 @@ bool CWriter::printConstExprCast(ConstantExpr *CE) {
+   case Instruction::PtrToInt:
+   case Instruction::IntToPtr:
+   case Instruction::BitCast:
++  case Instruction::AddrSpaceCast:
+     Ty = CE->getType();
+     NeedsExplicitCast = true;
+     break;
+@@ -1755,8 +1803,17 @@ void CWriter::writeOperand(Value *Operand, enum OperandContext Context) {
+     // We fix up the pointer type here.
+     if (!isEmptyType(InnerType.value()) && !InnerType.value()->isFunctionTy())
+       Out << "(&";
+-    else
+-      Out << "((void*)&";
++    else {
++      unsigned ProgramAS = TheModule->getDataLayout().getProgramAddressSpace();
++      bool IsProgramPointer =
++          ProgramAS != 0 && Operand->getType()->isPointerTy() &&
++          cast<PointerType>(Operand->getType())->getAddressSpace() == ProgramAS;
++      const auto *Global = dyn_cast<GlobalVariable>(Operand);
++      bool IsConstantObject = Global && Global->isConstant();
++      Out << (IsProgramPointer
++                  ? "((llvm_cbe_program_pointer)&"
++                  : (IsConstantObject ? "((const void*)&" : "((void*)&"));
++    }
+   }
+ 
+   writeOperandInternal(Operand, Context);
+@@ -2461,6 +2518,8 @@ void CWriter::generateHeader(Module &M) {
+     OutHeaders << "#include <math.h>\n";
+   // Provide a definition for `bool' if not compiling with a C++ compiler.
+   OutHeaders << "#ifndef __cplusplus\ntypedef unsigned char bool;\n#endif\n";
++  if (M.getDataLayout().getProgramAddressSpace() != 0)
++    OutHeaders << "typedef void (*llvm_cbe_program_pointer)(void);\n";
+   OutHeaders << "\n";
+ 
+   Out << "\n\n/* Global Declarations */\n";
+@@ -5007,8 +5066,13 @@ void CWriter::visitCallInst(CallInst &I) {
+       }
+ 
+   if (NeedsCast) {
+-    // Ok, just cast the pointer type.
+-    Out << "((" << getFunctionName(&I) << "*)(void*)";
++    unsigned ProgramAS = TheModule->getDataLayout().getProgramAddressSpace();
++    bool IsProgramPointer =
++        ProgramAS != 0 && Callee->getType()->isPointerTy() &&
++        cast<PointerType>(Callee->getType())->getAddressSpace() == ProgramAS;
++    Out << "((" << getFunctionName(&I) << "*)";
++    if (!IsProgramPointer)
++      Out << "(void*)";
+     writeOperand(Callee, ContextCasted);
+     Out << ')';
+   } else {

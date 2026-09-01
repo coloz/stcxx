@@ -13,16 +13,19 @@ mkdir -p "${pycache}"
 PYTHONPYCACHEPREFIX="${pycache}" python3 -m py_compile \
   "${repo_root}/arduino/bridge/audit_and_adapt.py" \
   "${repo_root}/arduino/bridge/adapt.py" \
+  "${repo_root}/arduino/tests/check-stc-cpp-targets.py" \
   "${repo_root}/arduino/tests/check-bridge-adapter.py" \
   "${repo_root}/arduino/tests/check_sdcc_big_endian_narrowing.py"
 
 python3 "${repo_root}/arduino/tests/check-bridge-adapter.py"
 
-if test -x "${build_root}/clang/bin/clang"; then
-  python3 "${repo_root}/arduino/tests/check-clang-target.py" \
+if test -x "${build_root}/clang/bin/clang" && \
+    test -x "${build_root}/llvm-cbe/tools/llvm-cbe/llvm-cbe"; then
+  python3 "${repo_root}/arduino/tests/check-stc-cpp-targets.py" \
     --clang "${build_root}/clang/bin/clang" \
-    --clang-source "${build_root}/source/clang" \
-    --output "${build_root}/clang-check"
+    --llvm-cbe "${build_root}/llvm-cbe/tools/llvm-cbe/llvm-cbe" \
+    --probe-dir "${repo_root}/arduino/tests/probe" \
+    --output "${build_root}/stc-cpp-target-check"
 fi
 
 if test -x "${build_root}/llvm-cbe/tools/llvm-cbe/llvm-cbe"; then
@@ -51,6 +54,15 @@ if test -x "${build_root}/sdcc/bin/sdcc"; then
     "${repo_root}/arduino/tests/smoke.c" -o "${build_root}/smoke/mcs251.ihx"
   test -s "${build_root}/smoke/mcs51.ihx"
   test -s "${build_root}/smoke/mcs251.ihx"
+fi
+
+if test -x "${build_root}/llvm-cbe/tools/llvm-cbe/llvm-cbe" && \
+    test -x "${build_root}/sdcc/bin/sdcc"; then
+  STCXX_SDCC_INCLUDE_ROOT="${repo_root}/device/include" \
+    "${repo_root}/arduino/tests/cbe/run-stc-regressions.sh" \
+    "${build_root}/llvm-cbe/tools/llvm-cbe/llvm-cbe" \
+    "${build_root}/sdcc/bin/sdcc" \
+    "${build_root}/cbe-stc-regressions"
 fi
 
 echo "TOOLCHAIN_SELF_TEST=PASS"

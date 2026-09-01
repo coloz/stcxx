@@ -26,6 +26,7 @@ for command in git sha256sum cmake ninja make python3 patch tar; do
   command -v "${command}" >/dev/null || { echo "missing command: ${command}" >&2; exit 2; }
 done
 
+"${script_dir}/prepare-sources-wsl.sh"
 "${script_dir}/check-sources-wsl.sh"
 mkdir -p "${build_root}"
 

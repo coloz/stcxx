@@ -1,8 +1,87 @@
+diff --git a/include/clang/Basic/TargetInfo.h b/include/clang/Basic/TargetInfo.h
+index 1a8398d..2294287 100644
+--- a/include/clang/Basic/TargetInfo.h
++++ b/include/clang/Basic/TargetInfo.h
+@@ -484,6 +484,16 @@ public:
+                                         : getPointerAlignV(AddrSpace);
+   }
+ 
++  /// Return the representation used by ordinary C/C++ function pointers.
++  /// Targets with distinct program and generic-data address spaces may
++  /// override these without changing the default data-pointer model.
++  virtual uint64_t getFunctionPointerWidth() const {
++    return getPointerWidth(LangAS::Default);
++  }
++  virtual uint64_t getFunctionPointerAlign() const {
++    return getPointerAlign(LangAS::Default);
++  }
++
+   /// Return the maximum width of pointers on this target.
+   virtual uint64_t getMaxPointerWidth() const {
+     return PointerWidth;
+diff --git a/lib/AST/ASTContext.cpp b/lib/AST/ASTContext.cpp
+index dbeb3d1..3f233c1 100644
+--- a/lib/AST/ASTContext.cpp
++++ b/lib/AST/ASTContext.cpp
+@@ -2330,11 +2330,18 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
+     Width = Target->getPointerWidth(AS);
+     Align = Target->getPointerAlign(AS);
+     break;
+-  case Type::Pointer:
+-    AS = cast<PointerType>(T)->getPointeeType().getAddressSpace();
+-    Width = Target->getPointerWidth(AS);
+-    Align = Target->getPointerAlign(AS);
++  case Type::Pointer: {
++    QualType Pointee = cast<PointerType>(T)->getPointeeType();
++    if (Pointee->isFunctionType()) {
++      Width = Target->getFunctionPointerWidth();
++      Align = Target->getFunctionPointerAlign();
++    } else {
++      AS = Pointee.getAddressSpace();
++      Width = Target->getPointerWidth(AS);
++      Align = Target->getPointerAlign(AS);
++    }
+     break;
++  }
+   case Type::MemberPointer: {
+     const auto *MPT = cast<MemberPointerType>(T);
+     CXXABI::MemberPointerInfo MPI = ABI->getMemberPointerInfo(MPT);
+diff --git a/lib/AST/ItaniumCXXABI.cpp b/lib/AST/ItaniumCXXABI.cpp
+index a1b2551..3f744a7 100644
+--- a/lib/AST/ItaniumCXXABI.cpp
++++ b/lib/AST/ItaniumCXXABI.cpp
+@@ -224,10 +224,23 @@ public:
+   MemberPointerInfo
+   getMemberPointerInfo(const MemberPointerType *MPT) const override {
+     const TargetInfo &Target = Context.getTargetInfo();
+-    TargetInfo::IntType PtrDiff = Target.getPtrDiffType(LangAS::Default);
+     MemberPointerInfo MPI;
+-    MPI.Width = Target.getTypeWidth(PtrDiff);
+-    MPI.Align = Target.getTypeAlign(PtrDiff);
++    const llvm::Triple &Triple = Target.getTriple();
++    const llvm::StringRef Vendor = Triple.getVendorName();
++    if (Triple.getArch() == llvm::Triple::msp430 &&
++        (Vendor == "stc" || Vendor == "stc51")) {
++      // The synthetic STC profiles use the address width of a program
++      // pointer for the Itanium member-pointer representation.  This is
++      // deliberately independent of ptrdiff_t: SDCC uses a 32-bit ptrdiff_t
++      // while program pointers are 24-bit on MCS251 and 16-bit on MCS51.
++      MPI.Width = Vendor == "stc51" ? 16 : 24;
++      MPI.Align = 8;
++    } else {
++      TargetInfo::IntType PtrDiff =
++          Target.getPtrDiffType(LangAS::Default);
++      MPI.Width = Target.getTypeWidth(PtrDiff);
++      MPI.Align = Target.getTypeAlign(PtrDiff);
++    }
+     MPI.HasPadding = false;
+     if (MPT->isMemberFunctionPointer())
+       MPI.Width *= 2;
 diff --git a/lib/Basic/Targets/MSP430.cpp b/lib/Basic/Targets/MSP430.cpp
-index 844f5d3..be3544e 100644
+index 844f5d3..c78c12f 100644
 --- a/lib/Basic/Targets/MSP430.cpp
 +++ b/lib/Basic/Targets/MSP430.cpp
-@@ -22,11 +22,18 @@ const char *const MSP430TargetInfo::GCCRegNames[] = {
+@@ -22,11 +22,21 @@ const char *const MSP430TargetInfo::GCCRegNames[] = {
  };
  
  ArrayRef<const char *> MSP430TargetInfo::getGCCRegNames() const {
@@ -14,7 +93,10 @@ index 844f5d3..be3544e 100644
  void MSP430TargetInfo::getTargetDefines(const LangOptions &Opts,
                                          MacroBuilder &Builder) const {
 +  if (isSTCSDCCIROnly()) {
-+    Builder.defineMacro("__STC_MCS251__", "1");
++    if (isSTCMCS251IROnly())
++      Builder.defineMacro("__STC_MCS251__", "1");
++    else
++      Builder.defineMacro("__STC_MCS51__", "1");
 +    Builder.defineMacro("__STC_CLANG_IR_ONLY__", "1");
 +    return;
 +  }
@@ -22,18 +104,29 @@ index 844f5d3..be3544e 100644
    Builder.defineMacro("__MSP430__");
    // FIXME: defines for different 'flavours' of MCU
 diff --git a/lib/Basic/Targets/MSP430.h b/lib/Basic/Targets/MSP430.h
-index 2266ada..aef3e9c 100644
+index 2266ada..9c8da72 100644
 --- a/lib/Basic/Targets/MSP430.h
 +++ b/lib/Basic/Targets/MSP430.h
-@@ -24,9 +24,68 @@ namespace targets {
+@@ -24,9 +24,84 @@ namespace targets {
  class LLVM_LIBRARY_VISIBILITY MSP430TargetInfo : public TargetInfo {
    static const char *const GCCRegNames[];
  
-+  bool isSTCSDCCIROnly() const {
++  bool isSTCMCS251IROnly() const {
 +    return getTriple().getArch() == llvm::Triple::msp430 &&
 +           getTriple().getVendorName() == "stc" &&
 +           getTriple().getOSName() == "none" &&
 +           getTriple().getEnvironment() == llvm::Triple::EABI;
++  }
++
++  bool isSTCMCS51IROnly() const {
++    return getTriple().getArch() == llvm::Triple::msp430 &&
++           getTriple().getVendorName() == "stc51" &&
++           getTriple().getOSName() == "none" &&
++           getTriple().getEnvironment() == llvm::Triple::EABI;
++  }
++
++  bool isSTCSDCCIROnly() const {
++    return isSTCMCS251IROnly() || isSTCMCS51IROnly();
 +  }
 +
  public:
@@ -44,7 +137,7 @@ index 2266ada..aef3e9c 100644
 +    // backend enum while keeping the emitted IR on a target that llvm-cbe can
 +    // consume.  No MSP430 object code is emitted for this environment.
 +    if (isSTCSDCCIROnly()) {
-+      BigEndian = true;
++      BigEndian = isSTCMCS251IROnly();
 +      TLSSupported = false;
 +      BoolWidth = 8;
 +      BoolAlign = 8;
@@ -75,7 +168,7 @@ index 2266ada..aef3e9c 100644
 +      LongDoubleFormat = &llvm::APFloat::IEEEsingle();
 +      Float128Align = 8;
 +      Ibm128Align = 8;
-+      SizeType = UnsignedLong;
++      SizeType = isSTCMCS251IROnly() ? UnsignedLong : UnsignedInt;
 +      PtrDiffType = SignedLong;
 +      IntPtrType = SignedLong;
 +      IntMaxType = SignedLongLong;
@@ -86,20 +179,36 @@ index 2266ada..aef3e9c 100644
 +      Int16Type = SignedInt;
 +      Char32Type = UnsignedLong;
 +      SigAtomicType = SignedInt;
-+      resetDataLayout(
-+          "E-m:e-p:24:8-i8:8-i16:8-i32:8-i64:8-i128:8-f32:8-f64:8-"
-+          "f128:8-a:8-n8:16:32-S8");
++      if (isSTCMCS251IROnly())
++        resetDataLayout(
++            "E-m:e-p:24:8-i8:8-i16:8-i32:8-i64:8-i128:8-f32:8-f64:8-"
++            "f128:8-a:8-n8:16:32-S8");
++      else
++        resetDataLayout(
++            "e-m:e-p:24:8-p1:16:8-P1-i8:8-i16:8-i32:8-i64:8-i128:8-"
++            "f32:8-f64:8-f128:8-a:8-n8:16:32-S8");
 +      return;
 +    }
      TLSSupported = false;
      IntWidth = 16;
      IntAlign = 16;
-@@ -58,12 +117,16 @@ public:
+@@ -57,13 +132,27 @@ public:
+ 
    bool allowsLargerPreferedTypeAlignment() const override { return false; }
  
++  uint64_t getFunctionPointerWidth() const override {
++    return isSTCMCS51IROnly() ? 16 : TargetInfo::getFunctionPointerWidth();
++  }
++
++  uint64_t getFunctionPointerAlign() const override {
++    return isSTCMCS51IROnly() ? 8 : TargetInfo::getFunctionPointerAlign();
++  }
++
    bool hasFeature(StringRef Feature) const override {
-+    if (isSTCSDCCIROnly())
++    if (isSTCMCS251IROnly())
 +      return Feature == "stc-mcs251";
++    if (isSTCMCS51IROnly())
++      return Feature == "stc-mcs51";
      return Feature == "msp430";
    }
  
@@ -111,7 +220,7 @@ index 2266ada..aef3e9c 100644
      // Make r0 - r3 be recognized by llc (f.e., in clobber list)
      static const TargetInfo::GCCRegAlias GCCRegAliases[] = {
          {{"r0"}, "pc"},
-@@ -76,6 +139,8 @@ public:
+@@ -76,6 +165,8 @@ public:
  
    bool validateAsmConstraint(const char *&Name,
                               TargetInfo::ConstraintInfo &info) const override {
@@ -121,23 +230,24 @@ index 2266ada..aef3e9c 100644
      switch (*Name) {
      case 'K': // the constant 1
 diff --git a/lib/CodeGen/BackendUtil.cpp b/lib/CodeGen/BackendUtil.cpp
-index 3e65eeb..95a0177 100644
+index 3e65eeb..8c1c6c8 100644
 --- a/lib/CodeGen/BackendUtil.cpp
 +++ b/lib/CodeGen/BackendUtil.cpp
-@@ -318,6 +318,12 @@ static bool actionRequiresCodeGen(BackendAction Action) {
+@@ -318,6 +318,13 @@ static bool actionRequiresCodeGen(BackendAction Action) {
           Action != Backend_EmitLL;
  }
  
 +static bool isSTCSDCCIROnlyTriple(const llvm::Triple &Triple) {
 +  return Triple.getArch() == llvm::Triple::msp430 &&
-+         Triple.getVendorName() == "stc" && Triple.getOSName() == "none" &&
++         (Triple.getVendorName() == "stc" ||
++          Triple.getVendorName() == "stc51") && Triple.getOSName() == "none" &&
 +         Triple.getEnvironment() == llvm::Triple::EABI;
 +}
 +
  static std::string flattenClangCommandLine(ArrayRef<std::string> Args,
                                             StringRef MainFilename) {
    if (Args.empty())
-@@ -1237,7 +1243,10 @@ void EmitAssemblyHelper::emitAssembly(BackendAction Action,
+@@ -1237,7 +1244,10 @@ void EmitAssemblyHelper::emitAssembly(BackendAction Action,
    setCommandLineOpts(CodeGenOpts);
  
    bool RequiresCodeGen = actionRequiresCodeGen(Action);
@@ -149,7 +259,7 @@ index 3e65eeb..95a0177 100644
  
    if (RequiresCodeGen && !TM)
      return;
-@@ -1374,6 +1383,16 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
+@@ -1374,6 +1384,16 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
    llvm::TimeTraceScope TimeScope("Backend");
    DiagnosticsEngine &Diags = CI.getDiagnostics();
  
@@ -166,17 +276,215 @@ index 3e65eeb..95a0177 100644
    std::unique_ptr<llvm::Module> EmptyModule;
    if (!CGOpts.ThinLTOIndexFile.empty()) {
      // If we are performing a ThinLTO importing compile, load the function index
+diff --git a/lib/CodeGen/ItaniumCXXABI.cpp b/lib/CodeGen/ItaniumCXXABI.cpp
+index 7c463f5..e41f33d 100644
+--- a/lib/CodeGen/ItaniumCXXABI.cpp
++++ b/lib/CodeGen/ItaniumCXXABI.cpp
+@@ -55,6 +55,17 @@ protected:
+   bool UseARMGuardVarABI;
+   bool Use32BitVTableOffsetABI;
+ 
++  llvm::IntegerType *getMemberPointerIntTy() const {
++    const llvm::Triple &Triple = CGM.getTarget().getTriple();
++    if (Triple.getArch() == llvm::Triple::msp430) {
++      if (Triple.getVendorName() == "stc51")
++        return CGM.Int16Ty;
++      if (Triple.getVendorName() == "stc")
++        return llvm::IntegerType::get(CGM.getLLVMContext(), 24);
++    }
++    return CGM.PtrDiffTy;
++  }
++
+   ItaniumMangleContext &getMangleContext() {
+     return cast<ItaniumMangleContext>(CodeGen::CGCXXABI::getMangleContext());
+   }
+@@ -595,9 +606,10 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
+ 
+ llvm::Type *
+ ItaniumCXXABI::ConvertMemberPointerType(const MemberPointerType *MPT) {
++  llvm::Type *MemberPointerIntTy = getMemberPointerIntTy();
+   if (MPT->isMemberDataPointer())
+-    return CGM.PtrDiffTy;
+-  return llvm::StructType::get(CGM.PtrDiffTy, CGM.PtrDiffTy);
++    return MemberPointerIntTy;
++  return llvm::StructType::get(MemberPointerIntTy, MemberPointerIntTy);
+ }
+ 
+ /// In the Itanium and ARM ABIs, method pointers have the form:
+@@ -631,7 +643,16 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+   auto *RD =
+       cast<CXXRecordDecl>(MPT->getClass()->castAs<RecordType>()->getDecl());
+ 
+-  llvm::Constant *ptrdiff_1 = llvm::ConstantInt::get(CGM.PtrDiffTy, 1);
++  llvm::IntegerType *MemberPointerIntTy = getMemberPointerIntTy();
++  llvm::Constant *ptrdiff_1 = llvm::ConstantInt::get(MemberPointerIntTy, 1);
++
++  const llvm::Triple &TargetTriple = CGM.getTarget().getTriple();
++  const bool UseSTCMCS51ProgramFunctionPointers =
++      TargetTriple.getArch() == llvm::Triple::msp430 &&
++      TargetTriple.getVendorName() == "stc51";
++  llvm::PointerType *CalleePtrTy = CGF.UnqualPtrTy;
++  if (UseSTCMCS51ProgramFunctionPointers)
++    CalleePtrTy = llvm::PointerType::get(CGM.getLLVMContext(), 1);
+ 
+   llvm::BasicBlock *FnVirtual = CGF.createBasicBlock("memptr.virtual");
+   llvm::BasicBlock *FnNonVirtual = CGF.createBasicBlock("memptr.nonvirtual");
+@@ -685,7 +706,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+     VTableOffset = Builder.CreateSub(VTableOffset, ptrdiff_1);
+   if (Use32BitVTableOffsetABI) {
+     VTableOffset = Builder.CreateTrunc(VTableOffset, CGF.Int32Ty);
+-    VTableOffset = Builder.CreateZExt(VTableOffset, CGM.PtrDiffTy);
++    VTableOffset = Builder.CreateZExt(VTableOffset, MemberPointerIntTy);
+   }
+ 
+   // Check the address of the function pointer if CFI on member function
+@@ -788,13 +809,18 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+     }
+   } // End of sanitizer scope
+ 
++  if (UseSTCMCS51ProgramFunctionPointers &&
++      VirtualFn->getType() != CalleePtrTy)
++    VirtualFn = Builder.CreateAddrSpaceCast(
++        VirtualFn, CalleePtrTy, "memptr.virtualfn.program");
++
+   CGF.EmitBranch(FnEnd);
+ 
+   // In the non-virtual path, the function pointer is actually a
+   // function pointer.
+   CGF.EmitBlock(FnNonVirtual);
+   llvm::Value *NonVirtualFn =
+-      Builder.CreateIntToPtr(FnAsInt, CGF.UnqualPtrTy, "memptr.nonvirtualfn");
++      Builder.CreateIntToPtr(FnAsInt, CalleePtrTy, "memptr.nonvirtualfn");
+ 
+   // Check the function pointer if CFI on member function pointers is enabled.
+   if (ShouldEmitCFICheck) {
+@@ -833,7 +859,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+ 
+   // We're done.
+   CGF.EmitBlock(FnEnd);
+-  llvm::PHINode *CalleePtr = Builder.CreatePHI(CGF.UnqualPtrTy, 2);
++  llvm::PHINode *CalleePtr = Builder.CreatePHI(CalleePtrTy, 2);
+   CalleePtr->addIncoming(VirtualFn, FnVirtual);
+   CalleePtr->addIncoming(NonVirtualFn, FnNonVirtual);
+ 
+@@ -864,7 +890,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+ llvm::Value *ItaniumCXXABI::EmitMemberDataPointerAddress(
+     CodeGenFunction &CGF, const Expr *E, Address Base, llvm::Value *MemPtr,
+     const MemberPointerType *MPT) {
+-  assert(MemPtr->getType() == CGM.PtrDiffTy);
++  assert(MemPtr->getType() == getMemberPointerIntTy());
+ 
+   CGBuilderTy &Builder = CGF.Builder;
+ 
+@@ -946,7 +972,8 @@ ItaniumCXXABI::EmitMemberPointerConversion(CodeGenFunction &CGF,
+       // Check whether we have a virtual offset or a pointer to a function.
+       assert(UseARMMethodPtrABI && "ARM ABI expected");
+       llvm::Value *Adj = Builder.CreateExtractValue(src, 1, "memptr.adj");
+-      llvm::Constant *Ptrdiff_1 = llvm::ConstantInt::get(CGM.PtrDiffTy, 1);
++      llvm::Constant *Ptrdiff_1 =
++          llvm::ConstantInt::get(getMemberPointerIntTy(), 1);
+       llvm::Value *AndVal = Builder.CreateAnd(Adj, Ptrdiff_1);
+       llvm::Value *IsVirtualOffset =
+           Builder.CreateIsNotNull(AndVal, "is.virtual.offset");
+@@ -1099,12 +1126,14 @@ ItaniumCXXABI::EmitMemberPointerConversion(const CastExpr *E,
+ 
+ llvm::Constant *
+ ItaniumCXXABI::EmitNullMemberPointer(const MemberPointerType *MPT) {
++  llvm::IntegerType *MemberPointerIntTy = getMemberPointerIntTy();
+   // Itanium C++ ABI 2.3:
+   //   A NULL pointer is represented as -1.
+   if (MPT->isMemberDataPointer())
+-    return llvm::ConstantInt::get(CGM.PtrDiffTy, -1ULL, /*isSigned=*/true);
++    return llvm::ConstantInt::get(MemberPointerIntTy, -1ULL,
++                                  /*isSigned=*/true);
+ 
+-  llvm::Constant *Zero = llvm::ConstantInt::get(CGM.PtrDiffTy, 0);
++  llvm::Constant *Zero = llvm::ConstantInt::get(MemberPointerIntTy, 0);
+   llvm::Constant *Values[2] = { Zero, Zero };
+   return llvm::ConstantStruct::getAnon(Values);
+ }
+@@ -1115,7 +1144,8 @@ ItaniumCXXABI::EmitMemberDataPointer(const MemberPointerType *MPT,
+   // Itanium C++ ABI 2.3:
+   //   A pointer to data member is an offset from the base address of
+   //   the class object containing it, represented as a ptrdiff_t
+-  return llvm::ConstantInt::get(CGM.PtrDiffTy, offset.getQuantity());
++  return llvm::ConstantInt::get(getMemberPointerIntTy(),
++                                offset.getQuantity());
+ }
+ 
+ llvm::Constant *
+@@ -1128,6 +1158,7 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+   assert(MD->isInstance() && "Member function must not be static!");
+ 
+   CodeGenTypes &Types = CGM.getTypes();
++  llvm::IntegerType *MemberPointerIntTy = getMemberPointerIntTy();
+ 
+   // Get the function pointer (or index if this is a virtual function).
+   llvm::Constant *MemPtr[2];
+@@ -1170,20 +1201,21 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+           CGM.getCodeGenOpts().PointerAuth.CXXMemberFunctionPointers;
+       if (Schema)
+         MemPtr[0] = llvm::ConstantExpr::getPtrToInt(
+-            getSignedVirtualMemberFunctionPointer(MD), CGM.PtrDiffTy);
++            getSignedVirtualMemberFunctionPointer(MD), MemberPointerIntTy);
+       else
+-        MemPtr[0] = llvm::ConstantInt::get(CGM.PtrDiffTy, VTableOffset);
++        MemPtr[0] = llvm::ConstantInt::get(MemberPointerIntTy, VTableOffset);
+       // Don't set the LSB of adj to 1 if pointer authentication for member
+       // function pointers is enabled.
+       MemPtr[1] = llvm::ConstantInt::get(
+-          CGM.PtrDiffTy, 2 * ThisAdjustment.getQuantity() + !Schema);
++          MemberPointerIntTy, 2 * ThisAdjustment.getQuantity() + !Schema);
+     } else {
+       // Itanium C++ ABI 2.3:
+       //   For a virtual function, [the pointer field] is 1 plus the
+       //   virtual table offset (in bytes) of the function,
+       //   represented as a ptrdiff_t.
+-      MemPtr[0] = llvm::ConstantInt::get(CGM.PtrDiffTy, VTableOffset + 1);
+-      MemPtr[1] = llvm::ConstantInt::get(CGM.PtrDiffTy,
++      MemPtr[0] =
++          llvm::ConstantInt::get(MemberPointerIntTy, VTableOffset + 1);
++      MemPtr[1] = llvm::ConstantInt::get(MemberPointerIntTy,
+                                          ThisAdjustment.getQuantity());
+     }
+   } else {
+@@ -1196,12 +1228,12 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+     } else {
+       // Use an arbitrary non-function type to tell GetAddrOfFunction that the
+       // function type is incomplete.
+-      Ty = CGM.PtrDiffTy;
++      Ty = MemberPointerIntTy;
+     }
+     llvm::Constant *addr = CGM.getMemberFunctionPointer(MD, Ty);
+ 
+-    MemPtr[0] = llvm::ConstantExpr::getPtrToInt(addr, CGM.PtrDiffTy);
+-    MemPtr[1] = llvm::ConstantInt::get(CGM.PtrDiffTy,
++    MemPtr[0] = llvm::ConstantExpr::getPtrToInt(addr, MemberPointerIntTy);
++    MemPtr[1] = llvm::ConstantInt::get(MemberPointerIntTy,
+                                        (UseARMMethodPtrABI ? 2 : 1) *
+                                        ThisAdjustment.getQuantity());
+   }
+@@ -1316,7 +1348,7 @@ ItaniumCXXABI::EmitMemberPointerIsNotNull(CodeGenFunction &CGF,
+ 
+   /// For member data pointers, this is just a check against -1.
+   if (MPT->isMemberDataPointer()) {
+-    assert(MemPtr->getType() == CGM.PtrDiffTy);
++    assert(MemPtr->getType() == getMemberPointerIntTy());
+     llvm::Value *NegativeOne =
+       llvm::Constant::getAllOnesValue(MemPtr->getType());
+     return Builder.CreateICmpNE(MemPtr, NegativeOne, "memptr.tobool");
 diff --git a/lib/Driver/ToolChains/Clang.cpp b/lib/Driver/ToolChains/Clang.cpp
-index 57b7d2b..5439a93 100644
+index 57b7d2b..9e5194b 100644
 --- a/lib/Driver/ToolChains/Clang.cpp
 +++ b/lib/Driver/ToolChains/Clang.cpp
-@@ -4328,7 +4328,10 @@ static void RenderCharacterOptions(const ArgList &Args, const llvm::Triple &T,
+@@ -4328,7 +4328,11 @@ static void RenderCharacterOptions(const ArgList &Args, const llvm::Triple &T,
          A->getOption().matches(options::OPT_fno_signed_char)) {
        CmdArgs.push_back("-fno-signed-char");
      }
 -  } else if (!isSignedCharDefault(T)) {
 +  } else if ((T.getArch() == llvm::Triple::msp430 &&
-+              T.getVendorName() == "stc" && T.getOSName() == "none" &&
++              (T.getVendorName() == "stc" ||
++               T.getVendorName() == "stc51") && T.getOSName() == "none" &&
 +              T.getEnvironment() == llvm::Triple::EABI) ||
 +             !isSignedCharDefault(T)) {
      CmdArgs.push_back("-fno-signed-char");
