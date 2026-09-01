@@ -2332,15 +2332,22 @@ loadDptrFromOperand (operand *op, bool loadBToo)
                  opGet returns a pointer to a static buffer, so we must
                  copy the strings before the next opGet call. */
               const char *dptr_name = opGet (op, 0, TRUE, FALSE);
-              char dptr_buf[64] = {0};
-              if (dptr_name && dptr_name[0])
-                strncpy (dptr_buf, dptr_name, sizeof(dptr_buf) - 1);
+              char *dptr_buf = Safe_strdup (dptr_name ? dptr_name : "");
               const char *dpxl_name = opGet (op, 2, FALSE, FALSE);
-              char dpxl_buf[64] = {0};
-              if (dpxl_name && dpxl_name[0])
-                strncpy (dpxl_buf, dpxl_name, sizeof(dpxl_buf) - 1);
+              char *dpxl_buf = Safe_strdup (dpxl_name ? dpxl_name : "");
+              bool cacheable =
+                strlen (dptr_buf) < sizeof(_G.dptrCache.symbol) &&
+                strlen (dpxl_buf) < sizeof(_G.dptrCache.dpxlSymbol);
 
-              if (_G.dptrCache.valid &&
+              if (!cacheable)
+                {
+                  /* Preserve complete assembler operands.  Long generated
+                     names cannot be represented by the fixed-size cache. */
+                  emitcode ("mov", "dptr,%s", dptr_buf);
+                  emitcode ("mov", "dpxl,%s", dpxl_buf);
+                  _G.dptrCache.valid = false;
+                }
+              else if (_G.dptrCache.valid &&
                   dptr_buf[0] && dpxl_buf[0] &&
                   !strcmp (dptr_buf, _G.dptrCache.symbol) &&
                   !strcmp (dpxl_buf, _G.dptrCache.dpxlSymbol))
@@ -2359,10 +2366,15 @@ loadDptrFromOperand (operand *op, bool loadBToo)
                            sizeof(_G.dptrCache.dpxlSymbol) - 1);
                 }
               else if (_G.dptrCache.valid &&
-                  dptr_buf[0])
+                  dptr_buf[0] &&
+                  strlen (_G.dptrCache.symbol) < 48 &&
+                  strlen (dptr_buf) < 48)
                 {                  /* Try inc dpx for sequential addresses of the same base.
                      Parse the symbol and offset from both the cached and
-                     new dptr strings.  Format: "NAME" or "(NAME + 0xOFF)". */
+                     new dptr strings.  Format: "NAME" or "(NAME + 0xOFF)".
+                     Longer expressions bypass this micro-optimization and
+                     use the full reload below; the parser's base buffers are
+                     intentionally bounded to 48 bytes. */
                   char cached_base[48] = {0};
                   unsigned long cached_off = 0;
                   char new_base[48] = {0};
@@ -2468,6 +2480,8 @@ loadDptrFromOperand (operand *op, bool loadBToo)
                            sizeof(_G.dptrCache.dpxlSymbol) - 1);
                   _G.dptrCache.valid = true;
                 }
+              Safe_free (dptr_buf);
+              Safe_free (dpxl_buf);
             }
           return;
 
@@ -3088,4 +3102,3 @@ skip_byte:
 
   wassertl_bt (size >= 0, "genCopy() copied more than there is to be copied.");
 }
-

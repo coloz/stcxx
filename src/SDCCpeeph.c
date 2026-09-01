@@ -3119,9 +3119,10 @@ keyForVar (const char *d)
 static void
 bindVar (int key, char **s, hTab ** vtab)
 {
-  char vval[MAX_PATTERN_LEN];
+  struct dbuf_s vval;
   char *vvx;
-  char *vv = vval;
+
+  dbuf_init (&vval, MAX_PATTERN_LEN);
 
   /* first get the value of the variable */
   vvx = *s;
@@ -3141,22 +3142,21 @@ bindVar (int key, char **s, hTab ** vtab)
           ubb++;
           while (ubb)
             {
-              *vv++ = *vvx++;
+              dbuf_append_char (&vval, *vvx++);
               if (*vvx == '(')
                 ubb++;
               if (*vvx == ')')
                 ubb--;
             }
           // include the trailing ')'
-          *vv++ = *vvx++;
+          dbuf_append_char (&vval, *vvx++);
         }
       else
-        *vv++ = *vvx++;
+        dbuf_append_char (&vval, *vvx++);
     }
   *s = vvx;
-  *vv = '\0';
   /* got value */
-  vvx = traceAlloc (&_G.values, Safe_strdup(vval));
+  vvx = traceAlloc (&_G.values, dbuf_detach_c_str (&vval));
 
   hTabAddItem (vtab, key, vvx);
 }

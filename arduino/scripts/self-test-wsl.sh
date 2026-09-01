@@ -38,6 +38,12 @@ if test -x "${build_root}/sdcc/bin/sdcc"; then
     --source "${repo_root}/arduino/tests/sdcc-mcs251-u32-low24.c" \
     --far-source "${repo_root}/arduino/tests/sdcc-mcs251-be-memory-low-byte.c" \
     --overlap-source "${repo_root}/arduino/tests/sdcc-mcs251-overlap-generic-store.c"
+  mkdir -p "${build_root}/long-dptr-symbol"
+  "${sdcc}" -mmcs251 --model-large --stack-auto --std-sdcc11 \
+    --opt-code-size -c \
+    "${repo_root}/arduino/tests/sdcc-mcs251-long-dptr-symbol.c" \
+    -o "${build_root}/long-dptr-symbol/long-dptr-symbol.rel"
+  test -s "${build_root}/long-dptr-symbol/long-dptr-symbol.rel"
   mkdir -p "${build_root}/smoke"
   "${sdcc}" -mmcs51 --model-large "${repo_root}/arduino/tests/smoke.c" \
     -o "${build_root}/smoke/mcs51.ihx"

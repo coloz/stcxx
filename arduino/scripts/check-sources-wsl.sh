@@ -21,7 +21,7 @@ check_sha() {
 }
 
 check_sha 46156f7ae915487cd31dd94a99934d05706db591bcf2942253e8248b2bf60b25 "${sdcc_patch}"
-check_sha d9c5a79a1f949a023c93d38bfd4df9ee2bdd1b3882d5c016820721134b85e7e9 "${sdcc_combined_patch}"
+check_sha 684114dd748396fa9967f18b177944a50800cd5621386a8387e2af24c7aa08f5 "${sdcc_combined_patch}"
 check_sha 42a6a91ba0f8803c22d266862a5e34293929a142314511d760dfc51a177e6715 "${clang_patch}"
 check_sha b7a1b7b0af7b9c7596af6bd46e36d11321926eaa66a7a7dc957ab0a1375ee4b0 "${repo_root}/arduino/sources/clang-20.1.8.src.tar.xz"
 check_sha 3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634 "${repo_root}/arduino/sources/cmake-20.1.8.src.tar.xz"
@@ -35,6 +35,16 @@ git -C "${repo_root}" diff --check
 patched_blob=$(git -C "${repo_root}" hash-object src/mcs251/gen.c)
 test "${patched_blob}" = 61aeb1ca96b0a7b81b6c5aa2bd77fd413745cae0 || {
   echo "patched src/mcs251/gen.c blob mismatch: ${patched_blob}" >&2
+  exit 3
+}
+patched_lower_blob=$(git -C "${repo_root}" hash-object src/mcs251/gen_lower.c.inc)
+test "${patched_lower_blob}" = f7d78a4691338b931baef9b81e5aaf0033cbf5a3 || {
+  echo "patched src/mcs251/gen_lower.c.inc blob mismatch: ${patched_lower_blob}" >&2
+  exit 3
+}
+patched_peeph_blob=$(git -C "${repo_root}" hash-object src/SDCCpeeph.c)
+test "${patched_peeph_blob}" = 74c37082698baca89bd8b2257b23e196387c124e || {
+  echo "patched src/SDCCpeeph.c blob mismatch: ${patched_peeph_blob}" >&2
   exit 3
 }
 lkmain_blob=$(git -C "${repo_root}" hash-object sdas/linksrc/lkmain.c)
@@ -62,6 +72,8 @@ patch --dry-run --reverse --batch \
 
 echo "SDCC_BASE_COMMIT=${base_commit}"
 echo "SDCC_PATCHED_GEN_BLOB=${patched_blob}"
+echo "SDCC_PATCHED_GEN_LOWER_BLOB=${patched_lower_blob}"
+echo "SDCC_PATCHED_PEEPH_BLOB=${patched_peeph_blob}"
 echo "SDCC_PATCHED_LKMAIN_BLOB=${lkmain_blob}"
 echo "SDCC_PATCHED_LKMEM_BLOB=${lkmem_blob}"
 echo "LLVM_PROJECT_COMMIT=${llvm_commit}"
