@@ -63,9 +63,11 @@ transform       = @program_transform_name@
 
 # Compiling entire program or any subproject
 # ------------------------------------------
-all: sdcc-ld8051 sdcc-ldz80 sdcc-ldgb sdcc-ld6808 sdcc-ldstm8 sdcc-ldpdk sdcc-ldf8
+all: sdcc-ld8051 sdcc-ldmcs251 sdcc-ldz80 sdcc-ldgb sdcc-ld6808 sdcc-ldstm8 sdcc-ldpdk sdcc-ldf8
 
 sdcc-ld8051: checkconf $(ASLINK)
+
+sdcc-ldmcs251: checkconf $(top_builddir)/bin/sdldmcs251$(EXEEXT)
 
 sdcc-ldz80: checkconf $(top_builddir)/bin/sdldz80$(EXEEXT)
 
@@ -79,7 +81,7 @@ sdcc-ldf8: checkconf $(top_builddir)/bin/sdldf8$(EXEEXT)
 
 sdcc-ldpdk: checkconf $(top_builddir)/bin/sdldpdk$(EXEEXT)
 
-$(top_builddir)/bin/sdldz80$(EXEEXT) $(top_builddir)/bin/sdldgb$(EXEEXT) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(top_builddir)/bin/sdld6808$(EXEEXT) $(top_builddir)/bin/sdldpdk$(EXEEXT) $(top_builddir)/bin/sdldf8$(EXEEXT): $(ASLINK)
+$(top_builddir)/bin/sdldmcs251$(EXEEXT) $(top_builddir)/bin/sdldz80$(EXEEXT) $(top_builddir)/bin/sdldgb$(EXEEXT) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(top_builddir)/bin/sdld6808$(EXEEXT) $(top_builddir)/bin/sdldpdk$(EXEEXT) $(top_builddir)/bin/sdldf8$(EXEEXT): $(ASLINK)
 	cp -p $(ASLINK) $@
 
 $(ASLINK): $(LKOBJECTS)
@@ -90,6 +92,11 @@ $(ASLINK): $(LKOBJECTS)
 install: all installdirs
 	$(INSTALL) $(top_builddir)/bin/sdld$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdld' | sed '$(transform)'`$(EXEEXT)
 	$(STRIP) $(DESTDIR)$(bindir)/`echo 'sdld' | sed '$(transform)'`$(EXEEXT)
+	if [ "`grep mcs251 $(top_builddir)/ports.build`" = "mcs251" ]; \
+	then \
+	  $(INSTALL) $(top_builddir)/bin/sdldmcs251$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdldmcs251' | sed '$(transform)'`$(EXEEXT); \
+	  $(STRIP) $(DESTDIR)$(bindir)/`echo 'sdldmcs251' | sed '$(transform)'`$(EXEEXT); \
+	fi
 	if [ "`grep stm8 $(top_builddir)/ports.build`" = "stm8" ]; \
 	then \
 	  $(INSTALL) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdldstm8' | sed '$(transform)'`$(EXEEXT); \
@@ -126,7 +133,7 @@ install: all installdirs
 # Deleting all the installed files
 # --------------------------------
 uninstall:
-	for ld in $(top_builddir)/bin/sdld $(top_builddir)/bin/sdldz80 $(top_builddir)/bin/sdldgb $(top_builddir)/bin/sdldstm8 $(top_builddir)/bin/sdld6808 $(top_builddir)/bin/sdldpdk $(top_builddir)/bin/sdldf8; \
+	for ld in $(top_builddir)/bin/sdld $(top_builddir)/bin/sdldmcs251 $(top_builddir)/bin/sdldz80 $(top_builddir)/bin/sdldgb $(top_builddir)/bin/sdldstm8 $(top_builddir)/bin/sdld6808 $(top_builddir)/bin/sdldpdk $(top_builddir)/bin/sdldf8; \
 	do \
 	  rm -f $(DESTDIR)$(bindir)/`echo \`basename $$ld\` | sed '$(transform)'`$(EXEEXT); \
 	done

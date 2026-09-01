@@ -502,6 +502,9 @@ int summary2(struct area * areap)
     _Mem XRam= {0xffff, 0, 0, 65536, "EXTERNAL RAM",    0x0100};
     _Mem Rom=  {0xffff, 0, 0, 65536, "ROM/EPROM/FLASH", 0x0200};
 
+    if (TARGET_IS_MCS251)
+        Stack.Start = SDLD_MAX_IRAM_SIZE;
+
     if(rflag) /*For the DS390*/
     {
         XRam.Max=0x1000000; /*24 bits*/
@@ -585,19 +588,33 @@ int summary2(struct area * areap)
     }
     fprintf(of, "\n0-3:Reg Banks, T:Bit regs, a-z:Data, B:Bits, Q:Overlay, I:iData, S:Stack, A:Absolute\n");
 
-    for(j=0; j<256; j++)
+    /* The synthetic SSEG allocation is recorded in the global stacksize.
+     * For a very large overlay area the representative area node may keep a
+     * zero a_size even though its final address (and the map) are correct.
+     * Therefore use the linker's authoritative -S value for MCS251 while
+     * retaining the area node as the source of the explicitly-bound base. */
+    if (TARGET_IS_MCS251 && iram_size > 0x100 && stacksize > 0 &&
+        Stack.Start < SDLD_MAX_IRAM_SIZE)
     {
-        if(idatamap[j]=='S')
-        {
-            Stack_Start=j;
-            break;
-        }
+        Stack_Start = Stack.Start;
+        Stack_Size = stacksize;
     }
-
-    for(j=Stack_Start, Stack_Size=0; j<((iram_size)?iram_size:256); j++)
+    else
     {
-        if(idatamap[j]=='S') Stack_Size++;
-        else break;
+        for(j=0; j<256; j++)
+        {
+            if(idatamap[j]=='S')
+            {
+                Stack_Start=j;
+                break;
+            }
+        }
+
+        for(j=Stack_Start, Stack_Size=0; j<((iram_size)?iram_size:256); j++)
+        {
+            if(idatamap[j]=='S') Stack_Size++;
+            else break;
+        }
     }
 
     xp=areap;
@@ -614,9 +631,16 @@ int summary2(struct area * areap)
     }
 
     /*Report the position of the begining of the stack*/
-    if(Stack_Start!=256 && Stack_Size > 0)
-        fprintf(of, "\n%s starts at: 0x%02lx (sp set to 0x%02lx) with %ld bytes available.",
-            rflag ? "16 bit mode initial stack" : "Stack", Stack_Start, Stack_Start-1, Stack_Size);
+    if(Stack_Size > 0 &&
+       ((TARGET_IS_MCS251 && Stack_Start < SDLD_MAX_IRAM_SIZE) ||
+        (!TARGET_IS_MCS251 && Stack_Start != 256))) {
+        if (TARGET_IS_MCS251)
+            fprintf(of, "\nStack starts at: 0x%04lx (spx set to 0x%04lx) with %ld bytes available.",
+                Stack_Start, Stack_Start-1, Stack_Size);
+        else
+            fprintf(of, "\n%s starts at: 0x%02lx (sp set to 0x%02lx) with %ld bytes available.",
+                rflag ? "16 bit mode initial stack" : "Stack", Stack_Start, Stack_Start-1, Stack_Size);
+    }
     else
         fprintf(of, "\nNo clue at where the stack begins and ends!");
 
@@ -716,4 +740,3 @@ int summary2(struct area * areap)
     return 0;
   }
 }
-

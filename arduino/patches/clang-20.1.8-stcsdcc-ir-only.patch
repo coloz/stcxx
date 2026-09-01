@@ -1,0 +1,184 @@
+diff --git a/lib/Basic/Targets/MSP430.cpp b/lib/Basic/Targets/MSP430.cpp
+index 844f5d3..be3544e 100644
+--- a/lib/Basic/Targets/MSP430.cpp
++++ b/lib/Basic/Targets/MSP430.cpp
+@@ -22,11 +22,18 @@ const char *const MSP430TargetInfo::GCCRegNames[] = {
+ };
+ 
+ ArrayRef<const char *> MSP430TargetInfo::getGCCRegNames() const {
++  if (isSTCSDCCIROnly())
++    return {};
+   return llvm::ArrayRef(GCCRegNames);
+ }
+ 
+ void MSP430TargetInfo::getTargetDefines(const LangOptions &Opts,
+                                         MacroBuilder &Builder) const {
++  if (isSTCSDCCIROnly()) {
++    Builder.defineMacro("__STC_MCS251__", "1");
++    Builder.defineMacro("__STC_CLANG_IR_ONLY__", "1");
++    return;
++  }
+   Builder.defineMacro("MSP430");
+   Builder.defineMacro("__MSP430__");
+   // FIXME: defines for different 'flavours' of MCU
+diff --git a/lib/Basic/Targets/MSP430.h b/lib/Basic/Targets/MSP430.h
+index 2266ada..aef3e9c 100644
+--- a/lib/Basic/Targets/MSP430.h
++++ b/lib/Basic/Targets/MSP430.h
+@@ -24,9 +24,68 @@ namespace targets {
+ class LLVM_LIBRARY_VISIBILITY MSP430TargetInfo : public TargetInfo {
+   static const char *const GCCRegNames[];
+ 
++  bool isSTCSDCCIROnly() const {
++    return getTriple().getArch() == llvm::Triple::msp430 &&
++           getTriple().getVendorName() == "stc" &&
++           getTriple().getOSName() == "none" &&
++           getTriple().getEnvironment() == llvm::Triple::EABI;
++  }
++
+ public:
+   MSP430TargetInfo(const llvm::Triple &Triple, const TargetOptions &)
+       : TargetInfo(Triple) {
++    // The msp430-stc-none-eabi triple is an IR-only frontend profile used by
++    // the Arduino STC core.  Reusing the MSP430 arch avoids adding a new LLVM
++    // backend enum while keeping the emitted IR on a target that llvm-cbe can
++    // consume.  No MSP430 object code is emitted for this environment.
++    if (isSTCSDCCIROnly()) {
++      BigEndian = true;
++      TLSSupported = false;
++      BoolWidth = 8;
++      BoolAlign = 8;
++      PointerWidth = 24;
++      PointerAlign = 8;
++      ShortWidth = 16;
++      ShortAlign = 8;
++      IntWidth = 16;
++      IntAlign = 8;
++      LongWidth = 32;
++      LongAlign = 8;
++      LongLongWidth = 64;
++      LongLongAlign = 8;
++      Int128Align = 8;
++      SuitableAlign = 8;
++      DefaultAlignForAttributeAligned = 8;
++      NewAlign = 8;
++      MaxVectorAlign = 8;
++      HalfWidth = 16;
++      HalfAlign = 8;
++      FloatWidth = 32;
++      FloatAlign = 8;
++      DoubleWidth = 32;
++      DoubleAlign = 8;
++      DoubleFormat = &llvm::APFloat::IEEEsingle();
++      LongDoubleWidth = 32;
++      LongDoubleAlign = 8;
++      LongDoubleFormat = &llvm::APFloat::IEEEsingle();
++      Float128Align = 8;
++      Ibm128Align = 8;
++      SizeType = UnsignedLong;
++      PtrDiffType = SignedLong;
++      IntPtrType = SignedLong;
++      IntMaxType = SignedLongLong;
++      WCharType = SignedInt;
++      Char16Type = UnsignedInt;
++      WIntType = SignedInt;
++      Int64Type = SignedLongLong;
++      Int16Type = SignedInt;
++      Char32Type = UnsignedLong;
++      SigAtomicType = SignedInt;
++      resetDataLayout(
++          "E-m:e-p:24:8-i8:8-i16:8-i32:8-i64:8-i128:8-f32:8-f64:8-"
++          "f128:8-a:8-n8:16:32-S8");
++      return;
++    }
+     TLSSupported = false;
+     IntWidth = 16;
+     IntAlign = 16;
+@@ -58,12 +117,16 @@ public:
+   bool allowsLargerPreferedTypeAlignment() const override { return false; }
+ 
+   bool hasFeature(StringRef Feature) const override {
++    if (isSTCSDCCIROnly())
++      return Feature == "stc-mcs251";
+     return Feature == "msp430";
+   }
+ 
+   ArrayRef<const char *> getGCCRegNames() const override;
+ 
+   ArrayRef<TargetInfo::GCCRegAlias> getGCCRegAliases() const override {
++    if (isSTCSDCCIROnly())
++      return {};
+     // Make r0 - r3 be recognized by llc (f.e., in clobber list)
+     static const TargetInfo::GCCRegAlias GCCRegAliases[] = {
+         {{"r0"}, "pc"},
+@@ -76,6 +139,8 @@ public:
+ 
+   bool validateAsmConstraint(const char *&Name,
+                              TargetInfo::ConstraintInfo &info) const override {
++    if (isSTCSDCCIROnly())
++      return false;
+     // FIXME: implement
+     switch (*Name) {
+     case 'K': // the constant 1
+diff --git a/lib/CodeGen/BackendUtil.cpp b/lib/CodeGen/BackendUtil.cpp
+index 3e65eeb..95a0177 100644
+--- a/lib/CodeGen/BackendUtil.cpp
++++ b/lib/CodeGen/BackendUtil.cpp
+@@ -318,6 +318,12 @@ static bool actionRequiresCodeGen(BackendAction Action) {
+          Action != Backend_EmitLL;
+ }
+ 
++static bool isSTCSDCCIROnlyTriple(const llvm::Triple &Triple) {
++  return Triple.getArch() == llvm::Triple::msp430 &&
++         Triple.getVendorName() == "stc" && Triple.getOSName() == "none" &&
++         Triple.getEnvironment() == llvm::Triple::EABI;
++}
++
+ static std::string flattenClangCommandLine(ArrayRef<std::string> Args,
+                                            StringRef MainFilename) {
+   if (Args.empty())
+@@ -1237,7 +1243,10 @@ void EmitAssemblyHelper::emitAssembly(BackendAction Action,
+   setCommandLineOpts(CodeGenOpts);
+ 
+   bool RequiresCodeGen = actionRequiresCodeGen(Action);
+-  CreateTargetMachine(RequiresCodeGen);
++  const llvm::Triple Triple(TheModule->getTargetTriple());
++  const bool IsSTCSDCCIROnly = isSTCSDCCIROnlyTriple(Triple);
++  if (!IsSTCSDCCIROnly)
++    CreateTargetMachine(RequiresCodeGen);
+ 
+   if (RequiresCodeGen && !TM)
+     return;
+@@ -1374,6 +1383,16 @@ void clang::emitBackendOutput(CompilerInstance &CI, CodeGenOptions &CGOpts,
+   llvm::TimeTraceScope TimeScope("Backend");
+   DiagnosticsEngine &Diags = CI.getDiagnostics();
+ 
++  const llvm::Triple Triple(M->getTargetTriple());
++  if (isSTCSDCCIROnlyTriple(Triple) && actionRequiresCodeGen(Action)) {
++    unsigned DiagID = Diags.getCustomDiagID(
++        DiagnosticsEngine::Error,
++        "target '%0' is an experimental LLVM IR-only profile; native "
++        "assembly/object emission is unsupported");
++    Diags.Report(DiagID) << Triple.getTriple();
++    return;
++  }
++
+   std::unique_ptr<llvm::Module> EmptyModule;
+   if (!CGOpts.ThinLTOIndexFile.empty()) {
+     // If we are performing a ThinLTO importing compile, load the function index
+diff --git a/lib/Driver/ToolChains/Clang.cpp b/lib/Driver/ToolChains/Clang.cpp
+index 57b7d2b..5439a93 100644
+--- a/lib/Driver/ToolChains/Clang.cpp
++++ b/lib/Driver/ToolChains/Clang.cpp
+@@ -4328,7 +4328,10 @@ static void RenderCharacterOptions(const ArgList &Args, const llvm::Triple &T,
+         A->getOption().matches(options::OPT_fno_signed_char)) {
+       CmdArgs.push_back("-fno-signed-char");
+     }
+-  } else if (!isSignedCharDefault(T)) {
++  } else if ((T.getArch() == llvm::Triple::msp430 &&
++              T.getVendorName() == "stc" && T.getOSName() == "none" &&
++              T.getEnvironment() == llvm::Triple::EABI) ||
++             !isSignedCharDefault(T)) {
+     CmdArgs.push_back("-fno-signed-char");
+   }
+ 

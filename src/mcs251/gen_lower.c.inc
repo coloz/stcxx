@@ -2034,7 +2034,8 @@ aopPutUsesAcc (const asmop* aop, const char *s, int offset)
       return false;
     case AOP_REG:
       wassert (!EQ (aop->aopu.aop_reg[offset]->name, "a"));
-      return FALSE;
+      return *s == '@' && EQ (aop->aopu.aop_reg[offset]->dname,
+                              aop->aopu.aop_reg[offset]->name);
     case AOP_DPTR:
       return TRUE;
     case AOP_MCS251_STK:
@@ -2133,7 +2134,15 @@ aopPut (asmop *aop, const char *s, int offset)
     case AOP_REG:
       if (!EQ (aop->aopu.aop_reg[offset]->name, s) && !EQ (aop->aopu.aop_reg[offset]->dname, s))
         {
-          if (*s == '@' ||
+          if (*s == '@' && aop->type == AOP_REG &&
+              EQ (aop->aopu.aop_reg[offset]->dname,
+                  aop->aopu.aop_reg[offset]->name))
+            {
+              MOVA (s);
+              emitcode ("mov", "%s,a", aop->aopu.aop_reg[offset]->name);
+              accuse = TRUE;
+            }
+          else if (*s == '@' ||
               EQ (s, "r0") || EQ (s, "r1") || EQ (s, "r2") || EQ (s, "r3") ||
               EQ (s, "r4") || EQ (s, "r5") || EQ (s, "r6") || EQ (s, "r7"))
             {

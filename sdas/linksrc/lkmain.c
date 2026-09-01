@@ -96,7 +96,11 @@ void Areas51 (void)
 	}
 
         sp = lkpsym("l_IRAM", 1);
-        sp->s_addr = ((iram_size>0) && (iram_size<=0x100)) ? iram_size : 0x0100;
+        if (TARGET_IS_MCS251 && iram_size > 0 &&
+            iram_size <= SDLD_MAX_IRAM_SIZE)
+                sp->s_addr = iram_size;
+        else
+                sp->s_addr = ((iram_size>0) && (iram_size<=0x100)) ? iram_size : 0x0100;
         sp->s_axp = NULL;
         sp->s_type |= S_DEF;
 }
@@ -997,7 +1001,10 @@ parse()
                                                 if (ip && *ip)
                                                 {
                                                         stacksize = expr(0);
-                                                        if (stacksize > 256) stacksize = 256;
+                                                        if (TARGET_IS_MCS251 && stacksize > (int)SDLD_MAX_IRAM_SIZE)
+                                                                stacksize = (int)SDLD_MAX_IRAM_SIZE;
+                                                        else if (!TARGET_IS_MCS251 && stacksize > 256)
+                                                                stacksize = 256;
                                                         else if (stacksize < 0) stacksize = 0;
                                                 }
 						return(0);
@@ -1606,8 +1613,12 @@ iramsav()
         iram_size = expr(0);    /* evaluate size expression */
   else
         iram_size = 128;                /* Default is 128 (0x80) bytes */
-  if ((iram_size<=0) || (iram_size>256))
+  if (TARGET_IS_MCS251) {
+        if ((iram_size <= 0) || (iram_size > SDLD_MAX_IRAM_SIZE))
+                iram_size = 0x100;
+  } else if ((iram_size<=0) || (iram_size>256)) {
         iram_size = 128;                /* Default is 128 (0x80) bytes */
+  }
 }
 
 /*Similar to iramsav but for xram memory*/

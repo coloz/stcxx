@@ -1,0 +1,882 @@
+diff --git a/sdas/linksrc/Makefile.in b/sdas/linksrc/Makefile.in
+index aa255f9..f1370f1 100644
+--- a/sdas/linksrc/Makefile.in
++++ b/sdas/linksrc/Makefile.in
+@@ -63,10 +63,12 @@ transform       = @program_transform_name@
+ 
+ # Compiling entire program or any subproject
+ # ------------------------------------------
+-all: sdcc-ld8051 sdcc-ldz80 sdcc-ldgb sdcc-ld6808 sdcc-ldstm8 sdcc-ldpdk sdcc-ldf8
++all: sdcc-ld8051 sdcc-ldmcs251 sdcc-ldz80 sdcc-ldgb sdcc-ld6808 sdcc-ldstm8 sdcc-ldpdk sdcc-ldf8
+ 
+ sdcc-ld8051: checkconf $(ASLINK)
+ 
++sdcc-ldmcs251: checkconf $(top_builddir)/bin/sdldmcs251$(EXEEXT)
++
+ sdcc-ldz80: checkconf $(top_builddir)/bin/sdldz80$(EXEEXT)
+ 
+ sdcc-ldgb: checkconf $(top_builddir)/bin/sdldgb$(EXEEXT)
+@@ -79,7 +81,7 @@ sdcc-ldf8: checkconf $(top_builddir)/bin/sdldf8$(EXEEXT)
+ 
+ sdcc-ldpdk: checkconf $(top_builddir)/bin/sdldpdk$(EXEEXT)
+ 
+-$(top_builddir)/bin/sdldz80$(EXEEXT) $(top_builddir)/bin/sdldgb$(EXEEXT) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(top_builddir)/bin/sdld6808$(EXEEXT) $(top_builddir)/bin/sdldpdk$(EXEEXT) $(top_builddir)/bin/sdldf8$(EXEEXT): $(ASLINK)
++$(top_builddir)/bin/sdldmcs251$(EXEEXT) $(top_builddir)/bin/sdldz80$(EXEEXT) $(top_builddir)/bin/sdldgb$(EXEEXT) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(top_builddir)/bin/sdld6808$(EXEEXT) $(top_builddir)/bin/sdldpdk$(EXEEXT) $(top_builddir)/bin/sdldf8$(EXEEXT): $(ASLINK)
+ 	cp -p $(ASLINK) $@
+ 
+ $(ASLINK): $(LKOBJECTS)
+@@ -90,6 +92,11 @@ $(ASLINK): $(LKOBJECTS)
+ install: all installdirs
+ 	$(INSTALL) $(top_builddir)/bin/sdld$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdld' | sed '$(transform)'`$(EXEEXT)
+ 	$(STRIP) $(DESTDIR)$(bindir)/`echo 'sdld' | sed '$(transform)'`$(EXEEXT)
++	if [ "`grep mcs251 $(top_builddir)/ports.build`" = "mcs251" ]; \
++	then \
++	  $(INSTALL) $(top_builddir)/bin/sdldmcs251$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdldmcs251' | sed '$(transform)'`$(EXEEXT); \
++	  $(STRIP) $(DESTDIR)$(bindir)/`echo 'sdldmcs251' | sed '$(transform)'`$(EXEEXT); \
++	fi
+ 	if [ "`grep stm8 $(top_builddir)/ports.build`" = "stm8" ]; \
+ 	then \
+ 	  $(INSTALL) $(top_builddir)/bin/sdldstm8$(EXEEXT) $(DESTDIR)$(bindir)/`echo 'sdldstm8' | sed '$(transform)'`$(EXEEXT); \
+@@ -126,7 +133,7 @@ install: all installdirs
+ # Deleting all the installed files
+ # --------------------------------
+ uninstall:
+-	for ld in $(top_builddir)/bin/sdld $(top_builddir)/bin/sdldz80 $(top_builddir)/bin/sdldgb $(top_builddir)/bin/sdldstm8 $(top_builddir)/bin/sdld6808 $(top_builddir)/bin/sdldpdk $(top_builddir)/bin/sdldf8; \
++	for ld in $(top_builddir)/bin/sdld $(top_builddir)/bin/sdldmcs251 $(top_builddir)/bin/sdldz80 $(top_builddir)/bin/sdldgb $(top_builddir)/bin/sdldstm8 $(top_builddir)/bin/sdld6808 $(top_builddir)/bin/sdldpdk $(top_builddir)/bin/sdldf8; \
+ 	do \
+ 	  rm -f $(DESTDIR)$(bindir)/`echo \`basename $$ld\` | sed '$(transform)'`$(EXEEXT); \
+ 	done
+diff --git a/sdas/linksrc/aslink.h b/sdas/linksrc/aslink.h
+index 0a41abb..dd2107f 100644
+--- a/sdas/linksrc/aslink.h
++++ b/sdas/linksrc/aslink.h
+@@ -1174,8 +1174,8 @@ extern  char *sdld_output;      /*      output file name, --output argument
+ extern char *optsdcc;
+ extern char *optsdcc_module;
+ /* sdld 8015 specific */
+-extern  char    idatamap[256];  /*      ' ' means unused
+-                                 */
++#define SDLD_MAX_IRAM_SIZE 0x10000u
++extern  char    idatamap[SDLD_MAX_IRAM_SIZE]; /* ' ' means unused */
+ /* end sdld 8051 specific */
+ /* end sdld specific */
+ 
+diff --git a/sdas/linksrc/lkarea.c b/sdas/linksrc/lkarea.c
+index 75f6004..8d98472 100644
+--- a/sdas/linksrc/lkarea.c
++++ b/sdas/linksrc/lkarea.c
+@@ -794,7 +794,7 @@ void lnkarea2 (void)
+         struct area *gs0_ap = NULL;
+         struct sym *sp_dseg_s=NULL, *sp_dseg_l=NULL;
+ 
+-        memset(idatamap, ' ', 256);
++        memset(idatamap, ' ', sizeof(idatamap));
+         memset(codemap8051, 0, sizeof(codemap8051));
+         memset(xdatamap, 0, sizeof(xdatamap));
+ 
+@@ -952,12 +952,23 @@ a_uint lnksect2 (struct area *tap, int locIndex)
+         /*Notice that only ISEG and SSEG can be in the indirectly addressable internal RAM*/
+         if( (!strcmp(tap->a_id, "ISEG")) || (!strcmp(tap->a_id, "SSEG")) )
+         {
+-                ramstart = iram_start;
+-
+-                if ((iram_size <= 0) || (ramstart + iram_size > 0x100))
+-                        ramlimit = 0x100;
++                if (TARGET_IS_MCS251 && !strcmp(tap->a_id, "SSEG") && iram_size > 0x100)
++                {
++                        /* SPX addresses the complete EDATA stack.  Respect an
++                           explicit SSEG base instead of searching from the
++                           first legacy-IRAM hole. */
++                        ramstart = tap->a_bset ? tap->a_addr : 0x100;
++                        ramlimit = iram_size;
++                }
+                 else
+-                        ramlimit = ramstart + iram_size;
++                {
++                        ramstart = iram_start;
++
++                        if ((iram_size <= 0) || (ramstart + iram_size > 0x100))
++                                ramlimit = 0x100;
++                        else
++                                ramlimit = ramstart + iram_size;
++                }
+ 	}
+         else
+         {
+@@ -1307,4 +1318,3 @@ a_uint lnksect2 (struct area *tap, int locIndex)
+         return addr;
+ }
+ /* end sdld specific */
+-
+diff --git a/sdas/linksrc/lkdata.c b/sdas/linksrc/lkdata.c
+index 758824a..9fb6fd9 100644
+--- a/sdas/linksrc/lkdata.c
++++ b/sdas/linksrc/lkdata.c
+@@ -602,7 +602,7 @@ struct	lbfile	*lbfhead;	/*	pointer to the first
+ 				 *	library file structure
+ 				 */
+ /* sdld 8051 specific */
+-char idatamap[256];
++char idatamap[SDLD_MAX_IRAM_SIZE];
+ /* end sdld 8051 specific */
+ 
+ /*
+diff --git a/sdas/linksrc/lkmain.c b/sdas/linksrc/lkmain.c
+index 0a7e1f4..ad60551 100644
+--- a/sdas/linksrc/lkmain.c
++++ b/sdas/linksrc/lkmain.c
+@@ -96,7 +96,11 @@ void Areas51 (void)
+ 	}
+ 
+         sp = lkpsym("l_IRAM", 1);
+-        sp->s_addr = ((iram_size>0) && (iram_size<=0x100)) ? iram_size : 0x0100;
++        if (TARGET_IS_MCS251 && iram_size > 0 &&
++            iram_size <= SDLD_MAX_IRAM_SIZE)
++                sp->s_addr = iram_size;
++        else
++                sp->s_addr = ((iram_size>0) && (iram_size<=0x100)) ? iram_size : 0x0100;
+         sp->s_axp = NULL;
+         sp->s_type |= S_DEF;
+ }
+@@ -997,7 +1001,10 @@ parse()
+                                                 if (ip && *ip)
+                                                 {
+                                                         stacksize = expr(0);
+-                                                        if (stacksize > 256) stacksize = 256;
++                                                        if (TARGET_IS_MCS251 && stacksize > (int)SDLD_MAX_IRAM_SIZE)
++                                                                stacksize = (int)SDLD_MAX_IRAM_SIZE;
++                                                        else if (!TARGET_IS_MCS251 && stacksize > 256)
++                                                                stacksize = 256;
+                                                         else if (stacksize < 0) stacksize = 0;
+                                                 }
+ 						return(0);
+@@ -1606,8 +1613,12 @@ iramsav()
+         iram_size = expr(0);    /* evaluate size expression */
+   else
+         iram_size = 128;                /* Default is 128 (0x80) bytes */
+-  if ((iram_size<=0) || (iram_size>256))
++  if (TARGET_IS_MCS251) {
++        if ((iram_size <= 0) || (iram_size > SDLD_MAX_IRAM_SIZE))
++                iram_size = 0x100;
++  } else if ((iram_size<=0) || (iram_size>256)) {
+         iram_size = 128;                /* Default is 128 (0x80) bytes */
++  }
+ }
+ 
+ /*Similar to iramsav but for xram memory*/
+diff --git a/sdas/linksrc/lkmem.c b/sdas/linksrc/lkmem.c
+index a4bb3b9..fcb4cab 100644
+--- a/sdas/linksrc/lkmem.c
++++ b/sdas/linksrc/lkmem.c
+@@ -502,6 +502,9 @@ int summary2(struct area * areap)
+     _Mem XRam= {0xffff, 0, 0, 65536, "EXTERNAL RAM",    0x0100};
+     _Mem Rom=  {0xffff, 0, 0, 65536, "ROM/EPROM/FLASH", 0x0200};
+ 
++    if (TARGET_IS_MCS251)
++        Stack.Start = SDLD_MAX_IRAM_SIZE;
++
+     if(rflag) /*For the DS390*/
+     {
+         XRam.Max=0x1000000; /*24 bits*/
+@@ -585,19 +588,33 @@ int summary2(struct area * areap)
+     }
+     fprintf(of, "\n0-3:Reg Banks, T:Bit regs, a-z:Data, B:Bits, Q:Overlay, I:iData, S:Stack, A:Absolute\n");
+ 
+-    for(j=0; j<256; j++)
++    /* The synthetic SSEG allocation is recorded in the global stacksize.
++     * For a very large overlay area the representative area node may keep a
++     * zero a_size even though its final address (and the map) are correct.
++     * Therefore use the linker's authoritative -S value for MCS251 while
++     * retaining the area node as the source of the explicitly-bound base. */
++    if (TARGET_IS_MCS251 && iram_size > 0x100 && stacksize > 0 &&
++        Stack.Start < SDLD_MAX_IRAM_SIZE)
++    {
++        Stack_Start = Stack.Start;
++        Stack_Size = stacksize;
++    }
++    else
+     {
+-        if(idatamap[j]=='S')
++        for(j=0; j<256; j++)
+         {
+-            Stack_Start=j;
+-            break;
++            if(idatamap[j]=='S')
++            {
++                Stack_Start=j;
++                break;
++            }
+         }
+-    }
+ 
+-    for(j=Stack_Start, Stack_Size=0; j<((iram_size)?iram_size:256); j++)
+-    {
+-        if(idatamap[j]=='S') Stack_Size++;
+-        else break;
++        for(j=Stack_Start, Stack_Size=0; j<((iram_size)?iram_size:256); j++)
++        {
++            if(idatamap[j]=='S') Stack_Size++;
++            else break;
++        }
+     }
+ 
+     xp=areap;
+@@ -614,9 +631,16 @@ int summary2(struct area * areap)
+     }
+ 
+     /*Report the position of the begining of the stack*/
+-    if(Stack_Start!=256 && Stack_Size > 0)
+-        fprintf(of, "\n%s starts at: 0x%02lx (sp set to 0x%02lx) with %ld bytes available.",
+-            rflag ? "16 bit mode initial stack" : "Stack", Stack_Start, Stack_Start-1, Stack_Size);
++    if(Stack_Size > 0 &&
++       ((TARGET_IS_MCS251 && Stack_Start < SDLD_MAX_IRAM_SIZE) ||
++        (!TARGET_IS_MCS251 && Stack_Start != 256))) {
++        if (TARGET_IS_MCS251)
++            fprintf(of, "\nStack starts at: 0x%04lx (spx set to 0x%04lx) with %ld bytes available.",
++                Stack_Start, Stack_Start-1, Stack_Size);
++        else
++            fprintf(of, "\n%s starts at: 0x%02lx (sp set to 0x%02lx) with %ld bytes available.",
++                rflag ? "16 bit mode initial stack" : "Stack", Stack_Start, Stack_Start-1, Stack_Size);
++    }
+     else
+         fprintf(of, "\nNo clue at where the stack begins and ends!");
+ 
+@@ -716,4 +740,3 @@ int summary2(struct area * areap)
+     return 0;
+   }
+ }
+-
+diff --git a/sdas/linksrc/sdld.c b/sdas/linksrc/sdld.c
+index 123bd9a..b2b8812 100644
+--- a/sdas/linksrc/sdld.c
++++ b/sdas/linksrc/sdld.c
+@@ -73,6 +73,7 @@ sdld_init (char *path)
+     { "z80",  TARGET_ID_Z80,  },
+     { "z180", TARGET_ID_Z180, },
+     { "8051", TARGET_ID_8051, },
++    { "mcs251", TARGET_ID_MCS251, },
+     { "6808", TARGET_ID_6808, },
+     { "stm8", TARGET_ID_STM8, },
+     { "pdk",  TARGET_ID_PDK,  },
+@@ -144,5 +145,5 @@ int
+ is_sdld_target_8051_like(void)
+ {
+   check_init();
+-  return target == TARGET_ID_8051;
++  return target == TARGET_ID_8051 || target == TARGET_ID_MCS251;
+ }
+diff --git a/sdas/linksrc/sdld.h b/sdas/linksrc/sdld.h
+index e2ddfcf..12bf896 100644
+--- a/sdas/linksrc/sdld.h
++++ b/sdas/linksrc/sdld.h
+@@ -24,6 +24,7 @@ enum sdld_target_e {
+   TARGET_ID_Z80,
+   TARGET_ID_Z180,
+   TARGET_ID_8051,
++  TARGET_ID_MCS251,
+   TARGET_ID_6808,
+   TARGET_ID_STM8,
+   TARGET_ID_PDK,
+@@ -43,7 +44,8 @@ int is_sdld_target_8051_like(void);
+ #define TARGET_IS_GB	(get_sdld_target() == TARGET_ID_GB)
+ #define TARGET_IS_Z80   (get_sdld_target() == TARGET_ID_Z80)
+ #define TARGET_IS_Z180  (get_sdld_target() == TARGET_ID_Z180)
+-#define TARGET_IS_8051  (get_sdld_target() == TARGET_ID_8051)
++#define TARGET_IS_8051  is_sdld_target_8051_like()
++#define TARGET_IS_MCS251 (get_sdld_target() == TARGET_ID_MCS251)
+ #define TARGET_IS_6808  (get_sdld_target() == TARGET_ID_6808)
+ #define TARGET_IS_STM8  (get_sdld_target() == TARGET_ID_STM8)
+ #define TARGET_IS_PDK                      \
+diff --git a/src/SDCCmain.c b/src/SDCCmain.c
+index 0f560a2..f6c7c89 100644
+--- a/src/SDCCmain.c
++++ b/src/SDCCmain.c
+@@ -1981,7 +1981,7 @@ linkEdit (char **envp)
+ 
+           /* if stack size specified */
+           if (options.stack_size)
+-            fprintf (lnkfile, "-S 0x%02x\n", options.stack_size);
++            fprintf (lnkfile, "-S 0x%x\n", options.stack_size);
+ 
+           /* if xram size specified */
+           if (options.xram_size_set)
+@@ -2049,7 +2049,9 @@ linkEdit (char **envp)
+           WRITE_SEG_LOC (BIT_NAME, 0);
+ 
+           /* stack start */
+-          if ((options.stack_loc) && (options.stack_loc < 0x100) && TARGET_MCS51_LIKE && !TARGET_MOS6502_LIKE)
++          if ((options.stack_loc) && TARGET_MCS51_LIKE &&
++              (TARGET_IS_MCS251 ? options.stack_loc < 0x10000 : options.stack_loc < 0x100) &&
++              !TARGET_MOS6502_LIKE)
+             {
+               WRITE_SEG_LOC ("SSEG", options.stack_loc);
+               /* with the disappearance of --no-pack-iram I don't think this is ever valid anymore */
+diff --git a/src/mcs251/Makefile.in b/src/mcs251/Makefile.in
+index 1fb1218..39d7e92 100644
+--- a/src/mcs251/Makefile.in
++++ b/src/mcs251/Makefile.in
+@@ -144,7 +144,9 @@ check: all
+ 		--source $(srcdir)/tests/native-extension.c
+ 	$(PYTHON) $(srcdir)/tests/check-register-allocation.py \
+ 		--sdcc $(top_builddir)/bin/sdcc \
+-		--source $(srcdir)/tests/register-pressure.c
++		--source $(srcdir)/tests/register-pressure.c \
++		--indirect-load-source \
++			$(srcdir)/tests/fixed-register-indirect-load.c
+ 	$(PYTHON) $(srcdir)/tests/check-wide-shift-jump-table.py \
+ 		--sdcc $(top_builddir)/bin/sdcc \
+ 		--source $(srcdir)/tests/large-switch.c
+diff --git a/src/mcs251/gen.c b/src/mcs251/gen.c
+index 7f19079..61aeb1c 100644
+--- a/src/mcs251/gen.c
++++ b/src/mcs251/gen.c
+@@ -53,6 +53,25 @@ extern int allocInfo;
+  */
+ #include "gen_lower.c.inc"
+ 
++/* MCS251 native PUSH/POP of a double register transfers four bytes.  The
++ * generic emitpush()/emitpop() helpers account for one byte, so keep the
++ * compiler's stack-offset model in sync when using the native wide form. */
++static void
++mcs251EmitPushWide (const char *arg, int size)
++{
++  wassertl (size > 0, "invalid wide push size");
++  emitpush (arg);
++  _G.stack.pushed += size - 1;
++}
++
++static void
++mcs251EmitPopWide (const char *arg, int size)
++{
++  wassertl (size > 0 && _G.stack.pushed >= size, "stack underflow");
++  _G.stack.pushed -= size - 1;
++  emitpop (arg);
++}
++
+ /*-----------------------------------------------------------------*/
+ /* genMove_o - Copy part of one asmop to another                   */
+ /*-----------------------------------------------------------------*/
+@@ -1801,7 +1820,8 @@ genFunction (iCode * ic)
+   wassertl (_G.stack.pushed == 0, "stack over/underflow");
+   wassertl (_G.stack.xpushed == 0, "xstack over/underflow");
+ 
+-  /* if this is an interrupt service routine then save acc, b, dpl, dph */
++  /* if this is an interrupt service routine then save the compiler's
++     fixed scratch state in addition to acc, b, dpl and dph */
+   if (IFFUNC_ISISR (ftype))
+     {
+       bitVect *rsavebits;
+@@ -1832,6 +1852,12 @@ genFunction (iCode * ic)
+         emitpush ("dpl");
+       if (!inExcludeList ("dph"))
+         emitpush ("dph");
++      if (!inExcludeList ("dpxl"))
++        emitpush ("dpxl");
++      if (!inExcludeList ("dr24"))
++        mcs251EmitPushWide ("dr24", 4);
++      if (!inExcludeList ("dr28"))
++        mcs251EmitPushWide ("dr28", 4);
+ 
+       /* R8-R15 are fixed registers, not members of a PSW-selected bank. */
+       saveFixedByteRegisters (sym, IFFUNC_HASFCALL (ftype));
+@@ -2416,6 +2442,12 @@ genEndFunction (iCode * ic)
+ 
+       restoreFixedByteRegisters (sym, IFFUNC_HASFCALL (ftype));
+ 
++      if (!inExcludeList ("dr28"))
++        mcs251EmitPopWide ("dr28", 4);
++      if (!inExcludeList ("dr24"))
++        mcs251EmitPopWide ("dr24", 4);
++      if (!inExcludeList ("dpxl"))
++        emitpop ("dpxl");
+       if (!inExcludeList ("dph"))
+         emitpop ("dph");
+       if (!inExcludeList ("dpl"))
+@@ -3292,6 +3324,39 @@ mcs251GenDwordArithmetic (operand *left, operand *right, operand *result,
+   return TRUE;
+ }
+ 
++/* Multi-byte arithmetic proceeds from the low byte towards the high byte so
++   that carry propagates naturally.  A destination register can nevertheless
++   alias a source register that a later iteration still has to read.  For
++   example, [r7,r6,r5] + 5 -> [r5,r4,r3] must not overwrite source r5 while
++   producing destination byte zero. */
++static bool
++mcs251ArithmeticHasDestructiveOverlap (operand *result, operand *left,
++                                        operand *right, int size)
++{
++  asmop *resultAop = AOP (result);
++  asmop *leftAop = AOP (left);
++  asmop *rightAop = AOP (right);
++  int destination, source;
++
++  if (resultAop->type != AOP_REG)
++    return FALSE;
++
++  for (destination = 0; destination < size; ++destination)
++    for (source = destination + 1; source < size; ++source)
++      {
++        if (leftAop->type == AOP_REG && source < leftAop->size &&
++            resultAop->aopu.aop_reg[destination] ==
++              leftAop->aopu.aop_reg[source])
++          return TRUE;
++        if (rightAop->type == AOP_REG && source < rightAop->size &&
++            resultAop->aopu.aop_reg[destination] ==
++              rightAop->aopu.aop_reg[source])
++          return TRUE;
++      }
++
++  return FALSE;
++}
++
+ /*-----------------------------------------------------------------*/
+ /* genPlus - generates code for addition                           */
+ /*-----------------------------------------------------------------*/
+@@ -3304,6 +3369,7 @@ genPlus (iCode * ic)
+   bool swappedLR = FALSE;
+   operand *leftOp, *rightOp;
+   operand *op;
++  bool deferResultWrites;
+ 
+   D (emitcode (";", "genPlus"));
+ 
+@@ -3401,6 +3467,9 @@ genPlus (iCode * ic)
+       goto release;
+     }
+ 
++  deferResultWrites = mcs251ArithmeticHasDestructiveOverlap (
++    IC_RESULT (ic), leftOp, rightOp, size);
++
+   /* if the lower bytes of a literal are zero skip the addition */
+   if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
+     {
+@@ -3463,12 +3532,20 @@ genPlus (iCode * ic)
+             }
+           if (!size && maskedtopbyte)
+             emitcode ("anl", "a,#!constbyte", topbytemask);
+-          opPut (IC_RESULT (ic), "a", offset);
++          if (deferResultWrites)
++            emitpush ("acc");
++          else
++            opPut (IC_RESULT (ic), "a", offset);
+           add = "addc";         /* further adds must propagate carry */
+         }
+       else
+         {
+-          if (!sameRegs (AOP (IC_LEFT (ic)), AOP (IC_RESULT (ic))) || isOperandVolatile (IC_RESULT (ic), FALSE))
++          if (deferResultWrites)
++            {
++              MOVA (opGet (leftOp, offset, FALSE, FALSE));
++              emitpush ("acc");
++            }
++          else if (!sameRegs (AOP (IC_LEFT (ic)), AOP (IC_RESULT (ic))) || isOperandVolatile (IC_RESULT (ic), FALSE))
+             {
+               /* just move */
+               opPut (IC_RESULT (ic), opGet (leftOp, offset, FALSE, FALSE), offset);
+@@ -3477,6 +3554,13 @@ genPlus (iCode * ic)
+       offset++;
+     }
+ 
++  if (deferResultWrites)
++    while (offset-- > 0)
++      {
++        emitpop ("acc");
++        opPut (IC_RESULT (ic), "a", offset);
++      }
++
+   adjustArithmeticResult (ic);
+ 
+ release:
+@@ -8997,11 +9081,39 @@ finish:
+ /*-----------------------------------------------------------------*/
+ /* genDataPointerGet - generates code when ptr offset is known     */
+ /*-----------------------------------------------------------------*/
++static int
++mcs251PointerGetAccessOffset (iCode *ic)
++{
++  wassertl (IC_RIGHT (ic), "GET_VALUE_AT_ADDRESS without right operand");
++  wassertl (IS_OP_LITERAL (IC_RIGHT (ic)),
++            "GET_VALUE_AT_ADDRESS with non-literal right operand");
++  return (int) operandLitValue (IC_RIGHT (ic));
++}
++
++static void
++mcs251AdjustBytePointer (const char *rname, int displacement)
++{
++  for (int pending = displacement; pending > 0; --pending)
++    emitcode ("inc", "%s", rname);
++  for (int pending = displacement; pending < 0; ++pending)
++    emitcode ("dec", "%s", rname);
++}
++
++static void
++mcs251AdjustFarPointer (int displacement)
++{
++  for (int pending = displacement; pending > 0; --pending)
++    incrementFarPointer ();
++  for (int pending = displacement; pending < 0; ++pending)
++    decrementFarPointer ();
++}
++
+ static void
+ genDataPointerGet (operand * left, operand * result, iCode * ic)
+ {
+   const char *l;
+   int size, physicalOffset = 0;
++  int accessOffset = mcs251PointerGetAccessOffset (ic);
+   sym_link *type = operandType (result);
+ 
+   D (emitcode (";", "genDataPointerGet"));
+@@ -9018,9 +9130,10 @@ genDataPointerGet (operand * left, operand * result, iCode * ic)
+         type, physicalOffset, size);
+ 
+       dbuf_init (&dbuf, 128);
+-      if (AOP_SIZE (result) > 1)
++      if (AOP_SIZE (result) > 1 || accessOffset)
+         {
+-          dbuf_printf (&dbuf, "(%s + %d)", l, physicalOffset);
++          dbuf_printf (&dbuf, "(%s + %d)", l,
++                       accessOffset + physicalOffset);
+         }
+       else
+         {
+@@ -9047,6 +9160,7 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+   char *ifxCond = "a";
+   sym_link *rtype, *retype;
+   sym_link *ltype = operandType (left);
++  int accessOffset = mcs251PointerGetAccessOffset (ic);
+ 
+   D (emitcode (";", "genNearPointerGet"));
+ 
+@@ -9105,6 +9219,8 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+   else
+     rname = opGet (left, 0, FALSE, FALSE);
+ 
++  mcs251AdjustBytePointer (rname, accessOffset);
++
+   /* if bitfield then unpack the bits */
+   if (IS_BITFIELD (retype))
+     ifxCond = genUnpackBits (result, rname, POINTER, ifx);
+@@ -9140,6 +9256,10 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+         }
+     }
+ 
++  /* IC_RIGHT is an access-only displacement.  Leave only the separately
++     fused post-increment (if any) in the pointer value. */
++  mcs251AdjustBytePointer (rname, -accessOffset);
++
+   /* now some housekeeping stuff */
+   if (aop)                      /* we had to allocate for this iCode */
+     {
+@@ -9188,6 +9308,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+   const char *rname;
+   char *ifxCond = "a";
+   sym_link *rtype, *retype;
++  int accessOffset = mcs251PointerGetAccessOffset (ic);
+ 
+   D (emitcode (";", "genPagedPointerGet"));
+ 
+@@ -9217,6 +9338,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+     }
+ 
+   aopOp (result, ic, TRUE);
++  mcs251AdjustBytePointer (rname, accessOffset);
+ 
+   /* if bitfield then unpack the bits */
+   if (IS_BITFIELD (retype))
+@@ -9245,6 +9367,9 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+         }
+     }
+ 
++  /* Remove the access-only displacement before pointer write-back. */
++  mcs251AdjustBytePointer (rname, -accessOffset);
++
+   /* now some housekeeping stuff */
+   if (aop)                      /* we had to allocate for this iCode */
+     {
+@@ -9310,6 +9435,7 @@ static void
+ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
+ {
+   int size, offset;
++  int accessOffset = mcs251PointerGetAccessOffset (ic);
+   bool mcs251FarResult;
+   char *ifxCond = "a";
+   sym_link *retype = getSpec (operandType (result));
+@@ -9333,6 +9459,8 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+       emitcode ("mov", "dpx,dr28");
+     }
+ 
++  mcs251AdjustFarPointer (accessOffset);
++
+   /* if bit then unpack */
+   if (IS_BITFIELD (retype))
+     ifxCond = genUnpackBits (result, farPointerRegister (), FPOINTER, ifx);
+@@ -9366,6 +9494,7 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+ 
+   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
+     {
++      mcs251AdjustFarPointer (-accessOffset);
+       if (AOP_TYPE (left) == AOP_DPTR)
+         mcs251WriteBackPostincrementedPointer (left);
+       else
+@@ -9393,6 +9522,7 @@ static void
+ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
+ {
+   int size, offset;
++  int accessOffset = mcs251PointerGetAccessOffset (ic);
+   bool mcs251FarResult;
+   char *ifxCond = "a";
+   sym_link *retype = getSpec (operandType (result));
+@@ -9414,6 +9544,8 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+       emitcode ("mov", "dpx,dr28");
+     }
+ 
++  mcs251AdjustFarPointer (accessOffset);
++
+   /* if bit then unpack */
+   if (IS_BITFIELD (retype))
+     ifxCond = genUnpackBits (result, farPointerRegister (), CPOINTER, ifx);
+@@ -9447,6 +9579,7 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+ 
+   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
+     {
++      mcs251AdjustFarPointer (-accessOffset);
+       if (AOP_TYPE (left) == AOP_DPTR)
+         mcs251WriteBackPostincrementedPointer (left);
+       else
+@@ -9474,6 +9607,7 @@ static void
+ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
+ {
+   int size, offset;
++  int accessOffset;
+   bool mcs251FarResult;
+   char *ifxCond = "a";
+   sym_link *retype = getSpec (operandType (result));
+@@ -9495,6 +9629,12 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+       emitcode ("mov", "dpx,dr28");
+     }
+ 
++  /* GET_VALUE_AT_ADDRESS carries a literal byte displacement in IC_RIGHT.
++     Big-endian narrowing can turn a 32-bit load into a 24-bit load at +1;
++     ignoring this displacement reads the high 24 bits instead. */
++  accessOffset = mcs251PointerGetAccessOffset (ic);
++  mcs251AdjustFarPointer (accessOffset);
++
+   /* if bit then unpack */
+   if (IS_BITFIELD (retype))
+     {
+@@ -9530,6 +9670,10 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+ 
+   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
+     {
++      /* The fused post-increment belongs to the base pointer.  The access
++         displacement above is not part of that pointer update. */
++      mcs251AdjustFarPointer (-accessOffset);
++
+       if (AOP_TYPE (left) == AOP_DPTR)
+         mcs251WriteBackPostincrementedPointer (left);
+       else
+diff --git a/src/mcs251/gen_lower.c.inc b/src/mcs251/gen_lower.c.inc
+index 6ba73fb..b7218de 100644
+--- a/src/mcs251/gen_lower.c.inc
++++ b/src/mcs251/gen_lower.c.inc
+@@ -2034,7 +2034,8 @@ aopPutUsesAcc (const asmop* aop, const char *s, int offset)
+       return false;
+     case AOP_REG:
+       wassert (!EQ (aop->aopu.aop_reg[offset]->name, "a"));
+-      return FALSE;
++      return *s == '@' && EQ (aop->aopu.aop_reg[offset]->dname,
++                              aop->aopu.aop_reg[offset]->name);
+     case AOP_DPTR:
+       return TRUE;
+     case AOP_MCS251_STK:
+@@ -2133,7 +2134,15 @@ aopPut (asmop *aop, const char *s, int offset)
+     case AOP_REG:
+       if (!EQ (aop->aopu.aop_reg[offset]->name, s) && !EQ (aop->aopu.aop_reg[offset]->dname, s))
+         {
+-          if (*s == '@' ||
++          if (*s == '@' && aop->type == AOP_REG &&
++              EQ (aop->aopu.aop_reg[offset]->dname,
++                  aop->aopu.aop_reg[offset]->name))
++            {
++              MOVA (s);
++              emitcode ("mov", "%s,a", aop->aopu.aop_reg[offset]->name);
++              accuse = TRUE;
++            }
++          else if (*s == '@' ||
+               EQ (s, "r0") || EQ (s, "r1") || EQ (s, "r2") || EQ (s, "r3") ||
+               EQ (s, "r4") || EQ (s, "r5") || EQ (s, "r6") || EQ (s, "r7"))
+             {
+diff --git a/src/mcs251/main.c b/src/mcs251/main.c
+index 2cd5ac3..dbd223f 100644
+--- a/src/mcs251/main.c
++++ b/src/mcs251/main.c
+@@ -152,6 +152,14 @@ _mcs251_parseOptions (int *pargc, char **argv, int *i)
+ static void
+ _mcs251_finaliseOptions (void)
+ {
++  /* Let runtime libraries distinguish backend-owned interrupt context
++     preservation from source-level compatibility fallbacks. */
++  addSet (&preArgvSet,
++          Safe_strdup ("-D__SDCC_MCS251_EXTENDED_ISR_CONTEXT__=1"));
++
++  addSet (&preArgvSet,
++          Safe_strdup ("-D__SDCC_MCS251_EXTENDED_STACK_LINKER__=1"));
++
+   if (options.noXinitOpt)
+     port->genXINIT=0;
+ 
+@@ -1018,7 +1026,7 @@ get_model (void)
+ */
+ static const char *_linkCmd[] =
+ {
+-  "sdld", "-r", "-nf", "$1", "$L", NULL
++  "sdldmcs251", "-r", "-nf", "$1", "$L", NULL
+ };
+ 
+ /* $3 is replaced by assembler.debug_opts resp. port->assembler.plain_opts */
+diff --git a/src/mcs251/tests/check-register-allocation.py b/src/mcs251/tests/check-register-allocation.py
+index 507d693..2620acc 100644
+--- a/src/mcs251/tests/check-register-allocation.py
++++ b/src/mcs251/tests/check-register-allocation.py
+@@ -95,11 +95,13 @@ def main():
+     parser = argparse.ArgumentParser()
+     parser.add_argument("--sdcc", required=True)
+     parser.add_argument("--source", required=True)
++    parser.add_argument("--indirect-load-source", required=True)
+     args = parser.parse_args()
+ 
+     sdcc = Path(args.sdcc).resolve()
+     source = Path(args.source).resolve()
+-    for path in (sdcc, source):
++    indirect_load_source = Path(args.indirect_load_source).resolve()
++    for path in (sdcc, source, indirect_load_source):
+         if not path.exists():
+             parser.error(f"required path does not exist: {path}")
+ 
+@@ -131,6 +133,28 @@ def main():
+             )
+             assembly[name] = asm_path.read_text()
+ 
++        indirect_asm = workspace / "mcs251-indirect-load.asm"
++        indirect_rel = workspace / "mcs251-indirect-load.rel"
++        compile_source(
++            sdcc, indirect_load_source, "mcs251", indirect_asm,
++            ("--stack-auto",)
++        )
++        compile_source(
++            sdcc, indirect_load_source, "mcs251", indirect_rel,
++            ("--stack-auto",), assemble=True
++        )
++        assembly["mcs251-indirect-load"] = indirect_asm.read_text()
++        if not re.search(
++            r"^[ \t]*mov[ \t]+a,[ \t]*@r[01][ \t]*$\n"
++            r"^[ \t]*mov[ \t]+r(?:8|9|1[2-5]),[ \t]*a[ \t]*$",
++            assembly["mcs251-indirect-load"],
++            re.IGNORECASE | re.MULTILINE,
++        ):
++            raise AssertionError(
++                "MCS251 fixed-register indirect load did not lower "
++                "through the accumulator"
++            )
++
+         if not HIGH_MCS251_REGISTER.search(assembly["mcs251"]):
+             raise AssertionError(
+                 "MCS251 register pressure did not allocate R8-R15"
+diff --git a/src/mcs251/tests/fixed-register-indirect-load.c b/src/mcs251/tests/fixed-register-indirect-load.c
+new file mode 100644
+index 0000000..86d84df
+--- /dev/null
++++ b/src/mcs251/tests/fixed-register-indirect-load.c
+@@ -0,0 +1,91 @@
++typedef unsigned long fixed_indirect_fn (void *, unsigned char);
++
++extern void fixed_indirect_error (void *, unsigned int);
++
++static unsigned long
++fixed_indirect_add (unsigned long left, unsigned long right)
++{
++  return left + right;
++}
++
++unsigned long
++mcs251_fixed_register_indirect_load (void *arg_object, void *arg_buffer,
++                                     unsigned long arg_size)
++{
++  unsigned long result_storage;
++  void *object_storage;
++  void *buffer_storage;
++  unsigned long size_storage;
++  unsigned long index_storage;
++  void *object;
++  void *null_check;
++  unsigned long index_for_compare;
++  unsigned long size_for_compare;
++  void *buffer;
++  unsigned long index;
++  unsigned char byte;
++  void *vtable;
++  void *write_slot;
++  unsigned long written;
++  unsigned long index_for_increment;
++  unsigned long result;
++  unsigned long returned;
++
++  object_storage = arg_object;
++  buffer_storage = arg_buffer;
++  size_storage = arg_size;
++  object = object_storage;
++  index_storage = 0;
++  null_check = buffer_storage;
++  if (null_check == (void *)0)
++    goto null_buffer;
++  else
++    goto loop_header;
++
++null_buffer:
++  result_storage = 0;
++  goto return_result;
++
++  do
++    {
++loop_header:
++      index_for_compare = index_storage;
++      size_for_compare = size_storage;
++      if (index_for_compare < size_for_compare)
++        goto loop_body;
++      else
++        goto loop_done;
++
++loop_body:
++      buffer = buffer_storage;
++      index = index_storage;
++      byte = *(unsigned char *)&((unsigned char *)buffer)
++        [(long)(index & 0x00fffffful)];
++      vtable = *(void **)object;
++      write_slot = *(void **)vtable;
++      written = ((fixed_indirect_fn *)(void *)write_slot)(object, byte);
++      if (written == 0)
++        goto write_failed;
++      else
++        goto write_succeeded;
++
++write_succeeded:
++      index_for_increment = index_storage;
++      index_storage = fixed_indirect_add (index_for_increment, 1);
++      goto loop_header;
++    }
++  while (1);
++
++write_failed:
++  fixed_indirect_error (object, 1);
++  goto loop_done;
++
++loop_done:
++  result = index_storage;
++  result_storage = result;
++  goto return_result;
++
++return_result:
++  returned = result_storage;
++  return returned;
++}

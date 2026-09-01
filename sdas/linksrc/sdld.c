@@ -73,6 +73,7 @@ sdld_init (char *path)
     { "z80",  TARGET_ID_Z80,  },
     { "z180", TARGET_ID_Z180, },
     { "8051", TARGET_ID_8051, },
+    { "mcs251", TARGET_ID_MCS251, },
     { "6808", TARGET_ID_6808, },
     { "stm8", TARGET_ID_STM8, },
     { "pdk",  TARGET_ID_PDK,  },
@@ -144,5 +145,5 @@ int
 is_sdld_target_8051_like(void)
 {
   check_init();
-  return target == TARGET_ID_8051;
+  return target == TARGET_ID_8051 || target == TARGET_ID_MCS251;
 }

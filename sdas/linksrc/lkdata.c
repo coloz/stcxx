@@ -602,7 +602,7 @@ struct	lbfile	*lbfhead;	/*	pointer to the first
 				 *	library file structure
 				 */
 /* sdld 8051 specific */
-char idatamap[256];
+char idatamap[SDLD_MAX_IRAM_SIZE];
 /* end sdld 8051 specific */
 
 /*

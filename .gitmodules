@@ -1,0 +1,7 @@
+[submodule "toolchain/llvm-cbe"]
+	path = toolchain/llvm-cbe
+	url = https://github.com/JuliaHubOSS/llvm-cbe.git
+[submodule "toolchain/llvm-project"]
+	path = toolchain/llvm-project
+	url = https://github.com/llvm/llvm-project.git
+	ignore = dirty

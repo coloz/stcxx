@@ -1174,8 +1174,8 @@ extern  char *sdld_output;      /*      output file name, --output argument
 extern char *optsdcc;
 extern char *optsdcc_module;
 /* sdld 8015 specific */
-extern  char    idatamap[256];  /*      ' ' means unused
-                                 */
+#define SDLD_MAX_IRAM_SIZE 0x10000u
+extern  char    idatamap[SDLD_MAX_IRAM_SIZE]; /* ' ' means unused */
 /* end sdld 8051 specific */
 /* end sdld specific */
 

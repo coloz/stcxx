@@ -794,7 +794,7 @@ void lnkarea2 (void)
         struct area *gs0_ap = NULL;
         struct sym *sp_dseg_s=NULL, *sp_dseg_l=NULL;
 
-        memset(idatamap, ' ', 256);
+        memset(idatamap, ' ', sizeof(idatamap));
         memset(codemap8051, 0, sizeof(codemap8051));
         memset(xdatamap, 0, sizeof(xdatamap));
 
@@ -952,12 +952,23 @@ a_uint lnksect2 (struct area *tap, int locIndex)
         /*Notice that only ISEG and SSEG can be in the indirectly addressable internal RAM*/
         if( (!strcmp(tap->a_id, "ISEG")) || (!strcmp(tap->a_id, "SSEG")) )
         {
-                ramstart = iram_start;
-
-                if ((iram_size <= 0) || (ramstart + iram_size > 0x100))
-                        ramlimit = 0x100;
+                if (TARGET_IS_MCS251 && !strcmp(tap->a_id, "SSEG") && iram_size > 0x100)
+                {
+                        /* SPX addresses the complete EDATA stack.  Respect an
+                           explicit SSEG base instead of searching from the
+                           first legacy-IRAM hole. */
+                        ramstart = tap->a_bset ? tap->a_addr : 0x100;
+                        ramlimit = iram_size;
+                }
                 else
-                        ramlimit = ramstart + iram_size;
+                {
+                        ramstart = iram_start;
+
+                        if ((iram_size <= 0) || (ramstart + iram_size > 0x100))
+                                ramlimit = 0x100;
+                        else
+                                ramlimit = ramstart + iram_size;
+                }
 	}
         else
         {
@@ -1307,4 +1318,3 @@ a_uint lnksect2 (struct area *tap, int locIndex)
         return addr;
 }
 /* end sdld specific */
-

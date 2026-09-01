@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+tool_root=$(CDPATH= cd -- "${bin_dir}/.." && pwd)
+export PATH="${tool_root}/libexec:${bin_dir}:${PATH}"
+export GCC_EXEC_PREFIX="${tool_root}/libexec/"
+exec "${tool_root}/libexec/sdcpp" "$@"

@@ -53,6 +53,25 @@ extern int allocInfo;
  */
 #include "gen_lower.c.inc"
 
+/* MCS251 native PUSH/POP of a double register transfers four bytes.  The
+ * generic emitpush()/emitpop() helpers account for one byte, so keep the
+ * compiler's stack-offset model in sync when using the native wide form. */
+static void
+mcs251EmitPushWide (const char *arg, int size)
+{
+  wassertl (size > 0, "invalid wide push size");
+  emitpush (arg);
+  _G.stack.pushed += size - 1;
+}
+
+static void
+mcs251EmitPopWide (const char *arg, int size)
+{
+  wassertl (size > 0 && _G.stack.pushed >= size, "stack underflow");
+  _G.stack.pushed -= size - 1;
+  emitpop (arg);
+}
+
 /*-----------------------------------------------------------------*/
 /* genMove_o - Copy part of one asmop to another                   */
 /*-----------------------------------------------------------------*/
@@ -1801,7 +1820,8 @@ genFunction (iCode * ic)
   wassertl (_G.stack.pushed == 0, "stack over/underflow");
   wassertl (_G.stack.xpushed == 0, "xstack over/underflow");
 
-  /* if this is an interrupt service routine then save acc, b, dpl, dph */
+  /* if this is an interrupt service routine then save the compiler's
+     fixed scratch state in addition to acc, b, dpl and dph */
   if (IFFUNC_ISISR (ftype))
     {
       bitVect *rsavebits;
@@ -1832,6 +1852,12 @@ genFunction (iCode * ic)
         emitpush ("dpl");
       if (!inExcludeList ("dph"))
         emitpush ("dph");
+      if (!inExcludeList ("dpxl"))
+        emitpush ("dpxl");
+      if (!inExcludeList ("dr24"))
+        mcs251EmitPushWide ("dr24", 4);
+      if (!inExcludeList ("dr28"))
+        mcs251EmitPushWide ("dr28", 4);
 
       /* R8-R15 are fixed registers, not members of a PSW-selected bank. */
       saveFixedByteRegisters (sym, IFFUNC_HASFCALL (ftype));
@@ -2416,6 +2442,12 @@ genEndFunction (iCode * ic)
 
       restoreFixedByteRegisters (sym, IFFUNC_HASFCALL (ftype));
 
+      if (!inExcludeList ("dr28"))
+        mcs251EmitPopWide ("dr28", 4);
+      if (!inExcludeList ("dr24"))
+        mcs251EmitPopWide ("dr24", 4);
+      if (!inExcludeList ("dpxl"))
+        emitpop ("dpxl");
       if (!inExcludeList ("dph"))
         emitpop ("dph");
       if (!inExcludeList ("dpl"))
@@ -3292,6 +3324,39 @@ mcs251GenDwordArithmetic (operand *left, operand *right, operand *result,
   return TRUE;
 }
 
+/* Multi-byte arithmetic proceeds from the low byte towards the high byte so
+   that carry propagates naturally.  A destination register can nevertheless
+   alias a source register that a later iteration still has to read.  For
+   example, [r7,r6,r5] + 5 -> [r5,r4,r3] must not overwrite source r5 while
+   producing destination byte zero. */
+static bool
+mcs251ArithmeticHasDestructiveOverlap (operand *result, operand *left,
+                                        operand *right, int size)
+{
+  asmop *resultAop = AOP (result);
+  asmop *leftAop = AOP (left);
+  asmop *rightAop = AOP (right);
+  int destination, source;
+
+  if (resultAop->type != AOP_REG)
+    return FALSE;
+
+  for (destination = 0; destination < size; ++destination)
+    for (source = destination + 1; source < size; ++source)
+      {
+        if (leftAop->type == AOP_REG && source < leftAop->size &&
+            resultAop->aopu.aop_reg[destination] ==
+              leftAop->aopu.aop_reg[source])
+          return TRUE;
+        if (rightAop->type == AOP_REG && source < rightAop->size &&
+            resultAop->aopu.aop_reg[destination] ==
+              rightAop->aopu.aop_reg[source])
+          return TRUE;
+      }
+
+  return FALSE;
+}
+
 /*-----------------------------------------------------------------*/
 /* genPlus - generates code for addition                           */
 /*-----------------------------------------------------------------*/
@@ -3304,6 +3369,7 @@ genPlus (iCode * ic)
   bool swappedLR = FALSE;
   operand *leftOp, *rightOp;
   operand *op;
+  bool deferResultWrites;
 
   D (emitcode (";", "genPlus"));
 
@@ -3401,6 +3467,9 @@ genPlus (iCode * ic)
       goto release;
     }
 
+  deferResultWrites = mcs251ArithmeticHasDestructiveOverlap (
+    IC_RESULT (ic), leftOp, rightOp, size);
+
   /* if the lower bytes of a literal are zero skip the addition */
   if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
     {
@@ -3463,12 +3532,20 @@ genPlus (iCode * ic)
             }
           if (!size && maskedtopbyte)
             emitcode ("anl", "a,#!constbyte", topbytemask);
-          opPut (IC_RESULT (ic), "a", offset);
+          if (deferResultWrites)
+            emitpush ("acc");
+          else
+            opPut (IC_RESULT (ic), "a", offset);
           add = "addc";         /* further adds must propagate carry */
         }
       else
         {
-          if (!sameRegs (AOP (IC_LEFT (ic)), AOP (IC_RESULT (ic))) || isOperandVolatile (IC_RESULT (ic), FALSE))
+          if (deferResultWrites)
+            {
+              MOVA (opGet (leftOp, offset, FALSE, FALSE));
+              emitpush ("acc");
+            }
+          else if (!sameRegs (AOP (IC_LEFT (ic)), AOP (IC_RESULT (ic))) || isOperandVolatile (IC_RESULT (ic), FALSE))
             {
               /* just move */
               opPut (IC_RESULT (ic), opGet (leftOp, offset, FALSE, FALSE), offset);
@@ -3476,6 +3553,13 @@ genPlus (iCode * ic)
         }
       offset++;
     }
+
+  if (deferResultWrites)
+    while (offset-- > 0)
+      {
+        emitpop ("acc");
+        opPut (IC_RESULT (ic), "a", offset);
+      }
 
   adjustArithmeticResult (ic);
 
@@ -8997,11 +9081,39 @@ finish:
 /*-----------------------------------------------------------------*/
 /* genDataPointerGet - generates code when ptr offset is known     */
 /*-----------------------------------------------------------------*/
+static int
+mcs251PointerGetAccessOffset (iCode *ic)
+{
+  wassertl (IC_RIGHT (ic), "GET_VALUE_AT_ADDRESS without right operand");
+  wassertl (IS_OP_LITERAL (IC_RIGHT (ic)),
+            "GET_VALUE_AT_ADDRESS with non-literal right operand");
+  return (int) operandLitValue (IC_RIGHT (ic));
+}
+
+static void
+mcs251AdjustBytePointer (const char *rname, int displacement)
+{
+  for (int pending = displacement; pending > 0; --pending)
+    emitcode ("inc", "%s", rname);
+  for (int pending = displacement; pending < 0; ++pending)
+    emitcode ("dec", "%s", rname);
+}
+
+static void
+mcs251AdjustFarPointer (int displacement)
+{
+  for (int pending = displacement; pending > 0; --pending)
+    incrementFarPointer ();
+  for (int pending = displacement; pending < 0; ++pending)
+    decrementFarPointer ();
+}
+
 static void
 genDataPointerGet (operand * left, operand * result, iCode * ic)
 {
   const char *l;
   int size, physicalOffset = 0;
+  int accessOffset = mcs251PointerGetAccessOffset (ic);
   sym_link *type = operandType (result);
 
   D (emitcode (";", "genDataPointerGet"));
@@ -9018,9 +9130,10 @@ genDataPointerGet (operand * left, operand * result, iCode * ic)
         type, physicalOffset, size);
 
       dbuf_init (&dbuf, 128);
-      if (AOP_SIZE (result) > 1)
+      if (AOP_SIZE (result) > 1 || accessOffset)
         {
-          dbuf_printf (&dbuf, "(%s + %d)", l, physicalOffset);
+          dbuf_printf (&dbuf, "(%s + %d)", l,
+                       accessOffset + physicalOffset);
         }
       else
         {
@@ -9047,6 +9160,7 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
   char *ifxCond = "a";
   sym_link *rtype, *retype;
   sym_link *ltype = operandType (left);
+  int accessOffset = mcs251PointerGetAccessOffset (ic);
 
   D (emitcode (";", "genNearPointerGet"));
 
@@ -9105,6 +9219,8 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
   else
     rname = opGet (left, 0, FALSE, FALSE);
 
+  mcs251AdjustBytePointer (rname, accessOffset);
+
   /* if bitfield then unpack the bits */
   if (IS_BITFIELD (retype))
     ifxCond = genUnpackBits (result, rname, POINTER, ifx);
@@ -9139,6 +9255,10 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
             emitcode ("inc", "%s", rname);
         }
     }
+
+  /* IC_RIGHT is an access-only displacement.  Leave only the separately
+     fused post-increment (if any) in the pointer value. */
+  mcs251AdjustBytePointer (rname, -accessOffset);
 
   /* now some housekeeping stuff */
   if (aop)                      /* we had to allocate for this iCode */
@@ -9188,6 +9308,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
   const char *rname;
   char *ifxCond = "a";
   sym_link *rtype, *retype;
+  int accessOffset = mcs251PointerGetAccessOffset (ic);
 
   D (emitcode (";", "genPagedPointerGet"));
 
@@ -9217,6 +9338,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
     }
 
   aopOp (result, ic, TRUE);
+  mcs251AdjustBytePointer (rname, accessOffset);
 
   /* if bitfield then unpack the bits */
   if (IS_BITFIELD (retype))
@@ -9244,6 +9366,9 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
             emitcode ("inc", "%s", rname);
         }
     }
+
+  /* Remove the access-only displacement before pointer write-back. */
+  mcs251AdjustBytePointer (rname, -accessOffset);
 
   /* now some housekeeping stuff */
   if (aop)                      /* we had to allocate for this iCode */
@@ -9310,6 +9435,7 @@ static void
 genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
 {
   int size, offset;
+  int accessOffset = mcs251PointerGetAccessOffset (ic);
   bool mcs251FarResult;
   char *ifxCond = "a";
   sym_link *retype = getSpec (operandType (result));
@@ -9332,6 +9458,8 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
       emitcode ("mov", "dr24,dpx");
       emitcode ("mov", "dpx,dr28");
     }
+
+  mcs251AdjustFarPointer (accessOffset);
 
   /* if bit then unpack */
   if (IS_BITFIELD (retype))
@@ -9366,6 +9494,7 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
 
   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
     {
+      mcs251AdjustFarPointer (-accessOffset);
       if (AOP_TYPE (left) == AOP_DPTR)
         mcs251WriteBackPostincrementedPointer (left);
       else
@@ -9393,6 +9522,7 @@ static void
 genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
 {
   int size, offset;
+  int accessOffset = mcs251PointerGetAccessOffset (ic);
   bool mcs251FarResult;
   char *ifxCond = "a";
   sym_link *retype = getSpec (operandType (result));
@@ -9413,6 +9543,8 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
       emitcode ("mov", "dr24,dpx");
       emitcode ("mov", "dpx,dr28");
     }
+
+  mcs251AdjustFarPointer (accessOffset);
 
   /* if bit then unpack */
   if (IS_BITFIELD (retype))
@@ -9447,6 +9579,7 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
 
   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
     {
+      mcs251AdjustFarPointer (-accessOffset);
       if (AOP_TYPE (left) == AOP_DPTR)
         mcs251WriteBackPostincrementedPointer (left);
       else
@@ -9474,6 +9607,7 @@ static void
 genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
 {
   int size, offset;
+  int accessOffset;
   bool mcs251FarResult;
   char *ifxCond = "a";
   sym_link *retype = getSpec (operandType (result));
@@ -9494,6 +9628,12 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
       emitcode ("mov", "dr24,dpx");
       emitcode ("mov", "dpx,dr28");
     }
+
+  /* GET_VALUE_AT_ADDRESS carries a literal byte displacement in IC_RIGHT.
+     Big-endian narrowing can turn a 32-bit load into a 24-bit load at +1;
+     ignoring this displacement reads the high 24 bits instead. */
+  accessOffset = mcs251PointerGetAccessOffset (ic);
+  mcs251AdjustFarPointer (accessOffset);
 
   /* if bit then unpack */
   if (IS_BITFIELD (retype))
@@ -9530,6 +9670,10 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
 
   if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
     {
+      /* The fused post-increment belongs to the base pointer.  The access
+         displacement above is not part of that pointer update. */
+      mcs251AdjustFarPointer (-accessOffset);
+
       if (AOP_TYPE (left) == AOP_DPTR)
         mcs251WriteBackPostincrementedPointer (left);
       else

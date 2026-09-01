@@ -1981,7 +1981,7 @@ linkEdit (char **envp)
 
           /* if stack size specified */
           if (options.stack_size)
-            fprintf (lnkfile, "-S 0x%02x\n", options.stack_size);
+            fprintf (lnkfile, "-S 0x%x\n", options.stack_size);
 
           /* if xram size specified */
           if (options.xram_size_set)
@@ -2049,7 +2049,9 @@ linkEdit (char **envp)
           WRITE_SEG_LOC (BIT_NAME, 0);
 
           /* stack start */
-          if ((options.stack_loc) && (options.stack_loc < 0x100) && TARGET_MCS51_LIKE && !TARGET_MOS6502_LIKE)
+          if ((options.stack_loc) && TARGET_MCS51_LIKE &&
+              (TARGET_IS_MCS251 ? options.stack_loc < 0x10000 : options.stack_loc < 0x100) &&
+              !TARGET_MOS6502_LIKE)
             {
               WRITE_SEG_LOC ("SSEG", options.stack_loc);
               /* with the disappearance of --no-pack-iram I don't think this is ever valid anymore */

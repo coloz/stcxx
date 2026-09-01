@@ -95,11 +95,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--sdcc", required=True)
     parser.add_argument("--source", required=True)
+    parser.add_argument("--indirect-load-source", required=True)
     args = parser.parse_args()
 
     sdcc = Path(args.sdcc).resolve()
     source = Path(args.source).resolve()
-    for path in (sdcc, source):
+    indirect_load_source = Path(args.indirect_load_source).resolve()
+    for path in (sdcc, source, indirect_load_source):
         if not path.exists():
             parser.error(f"required path does not exist: {path}")
 
@@ -130,6 +132,28 @@ def main():
                 sdcc, source, port, rel_path, extra_flags, assemble=True
             )
             assembly[name] = asm_path.read_text()
+
+        indirect_asm = workspace / "mcs251-indirect-load.asm"
+        indirect_rel = workspace / "mcs251-indirect-load.rel"
+        compile_source(
+            sdcc, indirect_load_source, "mcs251", indirect_asm,
+            ("--stack-auto",)
+        )
+        compile_source(
+            sdcc, indirect_load_source, "mcs251", indirect_rel,
+            ("--stack-auto",), assemble=True
+        )
+        assembly["mcs251-indirect-load"] = indirect_asm.read_text()
+        if not re.search(
+            r"^[ \t]*mov[ \t]+a,[ \t]*@r[01][ \t]*$\n"
+            r"^[ \t]*mov[ \t]+r(?:8|9|1[2-5]),[ \t]*a[ \t]*$",
+            assembly["mcs251-indirect-load"],
+            re.IGNORECASE | re.MULTILINE,
+        ):
+            raise AssertionError(
+                "MCS251 fixed-register indirect load did not lower "
+                "through the accumulator"
+            )
 
         if not HIGH_MCS251_REGISTER.search(assembly["mcs251"]):
             raise AssertionError(

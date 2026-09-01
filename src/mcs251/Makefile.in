@@ -144,7 +144,9 @@ check: all
 		--source $(srcdir)/tests/native-extension.c
 	$(PYTHON) $(srcdir)/tests/check-register-allocation.py \
 		--sdcc $(top_builddir)/bin/sdcc \
-		--source $(srcdir)/tests/register-pressure.c
+		--source $(srcdir)/tests/register-pressure.c \
+		--indirect-load-source \
+			$(srcdir)/tests/fixed-register-indirect-load.c
 	$(PYTHON) $(srcdir)/tests/check-wide-shift-jump-table.py \
 		--sdcc $(top_builddir)/bin/sdcc \
 		--source $(srcdir)/tests/large-switch.c

@@ -152,6 +152,14 @@ _mcs251_parseOptions (int *pargc, char **argv, int *i)
 static void
 _mcs251_finaliseOptions (void)
 {
+  /* Let runtime libraries distinguish backend-owned interrupt context
+     preservation from source-level compatibility fallbacks. */
+  addSet (&preArgvSet,
+          Safe_strdup ("-D__SDCC_MCS251_EXTENDED_ISR_CONTEXT__=1"));
+
+  addSet (&preArgvSet,
+          Safe_strdup ("-D__SDCC_MCS251_EXTENDED_STACK_LINKER__=1"));
+
   if (options.noXinitOpt)
     port->genXINIT=0;
 
@@ -1018,7 +1026,7 @@ get_model (void)
 */
 static const char *_linkCmd[] =
 {
-  "sdld", "-r", "-nf", "$1", "$L", NULL
+  "sdldmcs251", "-r", "-nf", "$1", "$L", NULL
 };
 
 /* $3 is replaced by assembler.debug_opts resp. port->assembler.plain_opts */
