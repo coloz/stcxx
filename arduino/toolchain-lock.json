@@ -68,11 +68,11 @@
   },
   "bridge": {
     "shared_adapter": "arduino/bridge/audit_and_adapt.py",
-    "shared_adapter_sha256": "89c9a5adb165c32106e80f4e663e10c4532e1d28ce3b674356bd909878e7c7b1",
+    "shared_adapter_sha256": "fe7d5fbd4a8e2d90c88642dc8732555682d4dd7ba589cfdbb30657ea1fd9b13d",
     "cli_adapter": "arduino/bridge/adapt.py",
     "cli_adapter_sha256": "9980df2cd3d8805b33cd6aa1266984658a7e7f0676a24d47fbb6f6a82b0e7bb0",
     "regression": "arduino/tests/check-bridge-adapter.py",
-    "regression_sha256": "c809a13ae0a5611850165a8dec56fbe5dd634dee6c2ee8bafebd16d8f31aa006"
+    "regression_sha256": "8ec60e4093e6c96593682f3e2ca68fab0651d4f069dd12f5384bf030e15bddc8"
   },
   "profiles": {
     "mcs251": {

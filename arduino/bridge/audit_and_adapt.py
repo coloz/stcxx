@@ -763,49 +763,99 @@ def normalize_cbe_stateless_struct_returns(
     its generated body changes.
     """
 
-    empty_type = "l_struct_struct_OC_std_KD__KD_nothrow_t"
+    empty_type = (
+        "l_struct_struct_OC_ArduinoJson_KD__KD_V743JB42_KD__KD_detail_KD__KD_"
+        "integral_constant_OC_10"
+    )
     type_definition = re.compile(
         rf"^struct {re.escape(empty_type)} \{{\n"
         r"  uint8_t field0;\n"
         r"\};$",
         re.MULTILINE,
     )
-    if not type_definition.search(payload):
-        return payload, []
-
+    target_symbol = re.compile(
+        r"_ZNK11ArduinoJson8V743JB426detail14AllowAllFilterixI"
+        r"[A-Za-z0-9_]+EES2_RKT_"
+    )
     function_pattern = re.compile(
-        rf"^static struct (?P<type>{re.escape(empty_type)}) "
-        r"(?P<symbol>[A-Za-z_][A-Za-z0-9_]*AllowAllFilterix[A-Za-z0-9_]*)"
-        r"\([^\n]*\) \{\n(?P<body>.*?)^\}$",
+        r"^static struct (?P<type>[A-Za-z_][A-Za-z0-9_]*) "
+        r"(?P<symbol>[A-Za-z_][A-Za-z0-9_]*)"
+        r"\((?P<arguments>[^\n]*)\) \{\n(?P<body>.*?)^\}$",
         re.MULTILINE | re.DOTALL,
     )
     normalized_symbols: list[str] = []
 
     def rewrite(match: re.Match[str]) -> str:
+        return_type = match.group("type")
+        symbol = match.group("symbol")
         body = match.group("body")
         declaration = (
             f"  struct {empty_type} StructReturn;  "
             "/* Struct return temporary */"
         )
+        target_hint = "AllowAllFilterix" in symbol
+        placeholder_hint = (
+            return_type == empty_type
+            and body.count(declaration) == 1
+            and len(re.findall(r"\bStructReturn\b", body)) == 3
+            and re.search(r"^  return StructReturn;$", body, re.MULTILINE)
+            is not None
+        )
+        if not target_hint and not placeholder_hint:
+            return match.group(0)
+
+        require(
+            target_symbol.fullmatch(symbol) is not None,
+            f"unsupported stateless StructReturn function: {symbol}",
+        )
+        require(
+            return_type == empty_type,
+            f"unsupported stateless StructReturn type in {symbol}: {return_type}",
+        )
+        require(
+            len(type_definition.findall(payload)) == 1,
+            f"unsupported one-byte stateless return type definition in {symbol}",
+        )
+        require(
+            re.fullmatch(
+                r"void\* _[0-9]+, void\* _[0-9]+",
+                match.group("arguments"),
+            )
+            is not None,
+            f"unsupported stateless StructReturn arguments in {symbol}",
+        )
         require(
             body.count(declaration) == 1,
             f"unsupported stateless StructReturn declaration in "
-            f"{match.group('symbol')}",
+            f"{symbol}",
         )
-        require(
-            len(re.findall(r"\bStructReturn\b", body)) == 3
-            and re.search(
-                rf"^  struct {re.escape(empty_type)}\* _[0-9]+ = "
-                r"&StructReturn;$",
+        pointer_aliases = list(
+            re.finditer(
+                rf"^  struct {re.escape(empty_type)}\* "
+                r"(?P<alias>_[0-9]+) = &StructReturn;$",
                 body,
                 re.MULTILINE,
-            ) is not None
-            and re.search(
-                r"^  return StructReturn;$", body, re.MULTILINE
-            ) is not None,
-            f"unsupported stateless StructReturn use in {match.group('symbol')}",
+            )
         )
-        normalized_symbols.append(match.group("symbol"))
+        struct_return_uses = len(re.findall(r"\bStructReturn\b", body))
+        return_is_final = (
+            re.search(r"^  return StructReturn;\n?\Z", body, re.MULTILINE)
+            is not None
+        )
+        require(
+            struct_return_uses == 3
+            and len(pointer_aliases) == 1
+            and return_is_final,
+            f"unsupported stateless StructReturn use in {symbol}: "
+            f"uses={struct_return_uses}, pointer_aliases={len(pointer_aliases)}, "
+            f"return_is_final={return_is_final}",
+        )
+        pointer_alias = pointer_aliases[0].group("alias")
+        require(
+            len(re.findall(rf"\b{re.escape(pointer_alias)}\b", body)) == 1,
+            f"stateless StructReturn placeholder is observable in {symbol}",
+        )
+        normalized_symbols.append(symbol)
         initialized = declaration.replace(
             "StructReturn;", "StructReturn = { 0 };"
         )
@@ -814,10 +864,10 @@ def normalize_cbe_stateless_struct_returns(
 
     normalized = function_pattern.sub(rewrite, payload)
     residual = re.findall(
-        rf"^static struct {re.escape(empty_type)} "
+        r"^static struct [A-Za-z_][A-Za-z0-9_]* "
         r"[A-Za-z_][A-Za-z0-9_]*AllowAllFilterix[A-Za-z0-9_]*"
         r"\([^\n]*\) \{\n(?:(?!^\}$).)*?"
-        rf"struct {re.escape(empty_type)} StructReturn;",
+        r"StructReturn;  /\* Struct return temporary \*/",
         normalized,
         re.MULTILINE | re.DOTALL,
     )
