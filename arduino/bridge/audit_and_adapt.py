@@ -793,11 +793,30 @@ def normalize_cbe_stateless_struct_returns(
             f"  struct {empty_type} StructReturn;  "
             "/* Struct return temporary */"
         )
+        pointer_aliases = list(
+            re.finditer(
+                rf"^  struct {re.escape(return_type)}\* "
+                r"(?P<alias>_[0-9]+) = &StructReturn;$",
+                body,
+                re.MULTILINE,
+            )
+        )
+        placeholder_pointer_is_unobserved = (
+            len(pointer_aliases) == 1
+            and len(
+                re.findall(
+                    rf"\b{re.escape(pointer_aliases[0].group('alias'))}\b",
+                    body,
+                )
+            )
+            == 1
+        )
         target_hint = "AllowAllFilterix" in symbol
         placeholder_hint = (
             return_type == empty_type
             and body.count(declaration) == 1
             and len(re.findall(r"\bStructReturn\b", body)) == 3
+            and placeholder_pointer_is_unobserved
             and re.search(r"^  return StructReturn;$", body, re.MULTILINE)
             is not None
         )
@@ -828,14 +847,6 @@ def normalize_cbe_stateless_struct_returns(
             body.count(declaration) == 1,
             f"unsupported stateless StructReturn declaration in "
             f"{symbol}",
-        )
-        pointer_aliases = list(
-            re.finditer(
-                rf"^  struct {re.escape(empty_type)}\* "
-                r"(?P<alias>_[0-9]+) = &StructReturn;$",
-                body,
-                re.MULTILINE,
-            )
         )
         struct_return_uses = len(re.findall(r"\bStructReturn\b", body))
         return_is_final = (

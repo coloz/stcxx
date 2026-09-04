@@ -49,6 +49,32 @@ def check_stateless_struct_return() -> None:
     require("StructReturn = { 0 };" in adapted,
             "locked ArduinoJson stateless return was not initialized")
 
+    initialized_symbol = (
+        "_ZNK11ArduinoJson8V743JB4221DeserializationOption12NestingLimit"
+        "9decrementEv"
+    )
+    initialized_source = (
+        f"struct {stateless_type} {{\n"
+        "  uint8_t field0;\n"
+        "};\n"
+        f"static struct {stateless_type} {initialized_symbol}(void* _10) {{\n"
+        f"  struct {stateless_type} StructReturn;  "
+        "/* Struct return temporary */\n"
+        f"  struct {stateless_type}* _11 = &StructReturn;\n"
+        "  void* _12;\n\n"
+        "  _12 = _10;\n"
+        "  initialize_nesting_limit(_11, 9);\n"
+        "  return StructReturn;\n"
+        "}\n"
+    )
+    preserved, preserved_symbols = (
+        MODULE.normalize_cbe_stateless_struct_returns(initialized_source)
+    )
+    require(not preserved_symbols,
+            "constructor-initialized non-target return was audited as stateless")
+    require(preserved == initialized_source,
+            "constructor-initialized non-target return was rewritten")
+
     rejection_cases = {
         "wrong_return_type": source.replace(
             stateless_type, "l_struct_struct_OC_std_KD__KD_nothrow_t"
