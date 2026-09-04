@@ -68,7 +68,8 @@ install -m 0644 "${repo_root}/arduino/toolchain-lock.json" \
   "${pending_dir}/toolchain-lock.json"
 (
   cd "${pending_dir}"
-  find bin libexec share -type f -print0 | sort -z | xargs -0 sha256sum > MANIFEST.sha256
+  find bin libexec share toolchain-lock.json -type f -print0 | sort -z |
+    xargs -0 sha256sum > MANIFEST.sha256
 )
 
 mv -- "${pending_dir}" "${out_dir}"
