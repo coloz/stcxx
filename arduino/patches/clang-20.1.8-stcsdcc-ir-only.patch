@@ -1,5 +1,5 @@
 diff --git a/include/clang/Basic/TargetInfo.h b/include/clang/Basic/TargetInfo.h
-index 1a8398d..2294287 100644
+index 1a8398d4..75e4609d 100644
 --- a/include/clang/Basic/TargetInfo.h
 +++ b/include/clang/Basic/TargetInfo.h
 @@ -484,6 +484,16 @@ public:
@@ -9,35 +9,53 @@ index 1a8398d..2294287 100644
 +  /// Return the representation used by ordinary C/C++ function pointers.
 +  /// Targets with distinct program and generic-data address spaces may
 +  /// override these without changing the default data-pointer model.
-+  virtual uint64_t getFunctionPointerWidth() const {
-+    return getPointerWidth(LangAS::Default);
++  virtual uint64_t getFunctionPointerWidth(LangAS AS) const {
++    return getPointerWidth(AS);
 +  }
-+  virtual uint64_t getFunctionPointerAlign() const {
-+    return getPointerAlign(LangAS::Default);
++  virtual uint64_t getFunctionPointerAlign(LangAS AS) const {
++    return getPointerAlign(AS);
 +  }
 +
    /// Return the maximum width of pointers on this target.
    virtual uint64_t getMaxPointerWidth() const {
      return PointerWidth;
 diff --git a/lib/AST/ASTContext.cpp b/lib/AST/ASTContext.cpp
-index dbeb3d1..3f233c1 100644
+index dbeb3d10..58adcea7 100644
 --- a/lib/AST/ASTContext.cpp
 +++ b/lib/AST/ASTContext.cpp
-@@ -2330,11 +2330,18 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
-     Width = Target->getPointerWidth(AS);
+@@ -2323,18 +2323,32 @@ TypeInfo ASTContext::getTypeInfoImpl(const Type *T) const {
      Align = Target->getPointerAlign(AS);
+     break;
+   case Type::LValueReference:
+-  case Type::RValueReference:
++  case Type::RValueReference: {
+     // alignof and sizeof should never enter this code path here, so we go
+     // the pointer route.
+-    AS = cast<ReferenceType>(T)->getPointeeType().getAddressSpace();
+-    Width = Target->getPointerWidth(AS);
+-    Align = Target->getPointerAlign(AS);
++    QualType Pointee = cast<ReferenceType>(T)->getPointeeType();
++    AS = Pointee.getAddressSpace();
++    if (Pointee->isFunctionType()) {
++      Width = Target->getFunctionPointerWidth(AS);
++      Align = Target->getFunctionPointerAlign(AS);
++    } else {
++      Width = Target->getPointerWidth(AS);
++      Align = Target->getPointerAlign(AS);
++    }
      break;
 -  case Type::Pointer:
 -    AS = cast<PointerType>(T)->getPointeeType().getAddressSpace();
 -    Width = Target->getPointerWidth(AS);
 -    Align = Target->getPointerAlign(AS);
++  }
 +  case Type::Pointer: {
 +    QualType Pointee = cast<PointerType>(T)->getPointeeType();
++    AS = Pointee.getAddressSpace();
 +    if (Pointee->isFunctionType()) {
-+      Width = Target->getFunctionPointerWidth();
-+      Align = Target->getFunctionPointerAlign();
++      Width = Target->getFunctionPointerWidth(AS);
++      Align = Target->getFunctionPointerAlign(AS);
 +    } else {
-+      AS = Pointee.getAddressSpace();
 +      Width = Target->getPointerWidth(AS);
 +      Align = Target->getPointerAlign(AS);
 +    }
@@ -47,10 +65,10 @@ index dbeb3d1..3f233c1 100644
      const auto *MPT = cast<MemberPointerType>(T);
      CXXABI::MemberPointerInfo MPI = ABI->getMemberPointerInfo(MPT);
 diff --git a/lib/AST/ItaniumCXXABI.cpp b/lib/AST/ItaniumCXXABI.cpp
-index a1b2551..3f744a7 100644
+index a1b25514..6e29f7fa 100644
 --- a/lib/AST/ItaniumCXXABI.cpp
 +++ b/lib/AST/ItaniumCXXABI.cpp
-@@ -224,10 +224,23 @@ public:
+@@ -224,10 +224,22 @@ public:
    MemberPointerInfo
    getMemberPointerInfo(const MemberPointerType *MPT) const override {
      const TargetInfo &Target = Context.getTargetInfo();
@@ -58,15 +76,14 @@ index a1b2551..3f744a7 100644
      MemberPointerInfo MPI;
 -    MPI.Width = Target.getTypeWidth(PtrDiff);
 -    MPI.Align = Target.getTypeAlign(PtrDiff);
-+    const llvm::Triple &Triple = Target.getTriple();
-+    const llvm::StringRef Vendor = Triple.getVendorName();
-+    if (Triple.getArch() == llvm::Triple::msp430 &&
-+        (Vendor == "stc" || Vendor == "stc51")) {
++    const bool IsSTCMCS51 = Target.hasFeature("stc-mcs51");
++    const bool IsSTCMCS251 = Target.hasFeature("stc-mcs251");
++    if (IsSTCMCS51 || IsSTCMCS251) {
 +      // The synthetic STC profiles use the address width of a program
 +      // pointer for the Itanium member-pointer representation.  This is
 +      // deliberately independent of ptrdiff_t: SDCC uses a 32-bit ptrdiff_t
 +      // while program pointers are 24-bit on MCS251 and 16-bit on MCS51.
-+      MPI.Width = Vendor == "stc51" ? 16 : 24;
++      MPI.Width = IsSTCMCS51 ? 16 : 24;
 +      MPI.Align = 8;
 +    } else {
 +      TargetInfo::IntType PtrDiff =
@@ -78,7 +95,7 @@ index a1b2551..3f744a7 100644
      if (MPT->isMemberFunctionPointer())
        MPI.Width *= 2;
 diff --git a/lib/Basic/Targets/MSP430.cpp b/lib/Basic/Targets/MSP430.cpp
-index 844f5d3..c78c12f 100644
+index 844f5d3a..c78c12f8 100644
 --- a/lib/Basic/Targets/MSP430.cpp
 +++ b/lib/Basic/Targets/MSP430.cpp
 @@ -22,11 +22,21 @@ const char *const MSP430TargetInfo::GCCRegNames[] = {
@@ -104,7 +121,7 @@ index 844f5d3..c78c12f 100644
    Builder.defineMacro("__MSP430__");
    // FIXME: defines for different 'flavours' of MCU
 diff --git a/lib/Basic/Targets/MSP430.h b/lib/Basic/Targets/MSP430.h
-index 2266ada..9c8da72 100644
+index 2266ada2..b0d8f5f4 100644
 --- a/lib/Basic/Targets/MSP430.h
 +++ b/lib/Basic/Targets/MSP430.h
 @@ -24,9 +24,84 @@ namespace targets {
@@ -192,16 +209,20 @@ index 2266ada..9c8da72 100644
      TLSSupported = false;
      IntWidth = 16;
      IntAlign = 16;
-@@ -57,13 +132,27 @@ public:
+@@ -57,13 +132,31 @@ public:
  
    bool allowsLargerPreferedTypeAlignment() const override { return false; }
  
-+  uint64_t getFunctionPointerWidth() const override {
-+    return isSTCMCS51IROnly() ? 16 : TargetInfo::getFunctionPointerWidth();
++  uint64_t getFunctionPointerWidth(LangAS AS) const override {
++    return isSTCMCS51IROnly() && AS == LangAS::Default
++               ? 16
++               : TargetInfo::getFunctionPointerWidth(AS);
 +  }
 +
-+  uint64_t getFunctionPointerAlign() const override {
-+    return isSTCMCS51IROnly() ? 8 : TargetInfo::getFunctionPointerAlign();
++  uint64_t getFunctionPointerAlign(LangAS AS) const override {
++    return isSTCMCS51IROnly() && AS == LangAS::Default
++               ? 8
++               : TargetInfo::getFunctionPointerAlign(AS);
 +  }
 +
    bool hasFeature(StringRef Feature) const override {
@@ -220,7 +241,7 @@ index 2266ada..9c8da72 100644
      // Make r0 - r3 be recognized by llc (f.e., in clobber list)
      static const TargetInfo::GCCRegAlias GCCRegAliases[] = {
          {{"r0"}, "pc"},
-@@ -76,6 +165,8 @@ public:
+@@ -76,6 +169,8 @@ public:
  
    bool validateAsmConstraint(const char *&Name,
                               TargetInfo::ConstraintInfo &info) const override {
@@ -230,7 +251,7 @@ index 2266ada..9c8da72 100644
      switch (*Name) {
      case 'K': // the constant 1
 diff --git a/lib/CodeGen/BackendUtil.cpp b/lib/CodeGen/BackendUtil.cpp
-index 3e65eeb..8c1c6c8 100644
+index 3e65eeb3..8c1c6c86 100644
 --- a/lib/CodeGen/BackendUtil.cpp
 +++ b/lib/CodeGen/BackendUtil.cpp
 @@ -318,6 +318,13 @@ static bool actionRequiresCodeGen(BackendAction Action) {
@@ -276,29 +297,244 @@ index 3e65eeb..8c1c6c8 100644
    std::unique_ptr<llvm::Module> EmptyModule;
    if (!CGOpts.ThinLTOIndexFile.empty()) {
      // If we are performing a ThinLTO importing compile, load the function index
+diff --git a/lib/CodeGen/CGCall.cpp b/lib/CodeGen/CGCall.cpp
+index f790e78c..e4dd5f56 100644
+--- a/lib/CodeGen/CGCall.cpp
++++ b/lib/CodeGen/CGCall.cpp
+@@ -1211,21 +1211,22 @@ static llvm::Value *CoerceIntOrPtrToIntOrPtr(llvm::Value *Val,
+   if (Val->getType() == Ty)
+     return Val;
+ 
++  const llvm::DataLayout &DL = CGF.CGM.getDataLayout();
+   if (isa<llvm::PointerType>(Val->getType())) {
+     // If this is Pointer->Pointer avoid conversion to and from int.
+     if (isa<llvm::PointerType>(Ty))
+       return CGF.Builder.CreateBitCast(Val, Ty, "coerce.val");
+ 
+     // Convert the pointer to an integer so we can play with its width.
+-    Val = CGF.Builder.CreatePtrToInt(Val, CGF.IntPtrTy, "coerce.val.pi");
++    llvm::Type *SourceIntTy = DL.getIntPtrType(Val->getType());
++    Val = CGF.Builder.CreatePtrToInt(Val, SourceIntTy, "coerce.val.pi");
+   }
+ 
+   llvm::Type *DestIntTy = Ty;
+   if (isa<llvm::PointerType>(DestIntTy))
+-    DestIntTy = CGF.IntPtrTy;
++    DestIntTy = DL.getIntPtrType(DestIntTy);
+ 
+   if (Val->getType() != DestIntTy) {
+-    const llvm::DataLayout &DL = CGF.CGM.getDataLayout();
+     if (DL.isBigEndian()) {
+       // Preserve the high bits on big-endian targets.
+       // That is what memory coercion does.
+diff --git a/lib/CodeGen/CGExprScalar.cpp b/lib/CodeGen/CGExprScalar.cpp
+index df850421..037d4815 100644
+--- a/lib/CodeGen/CGExprScalar.cpp
++++ b/lib/CodeGen/CGExprScalar.cpp
+@@ -4441,10 +4441,12 @@ Value *ScalarExprEmitter::EmitSub(const BinOpInfo &op) {
+   // Otherwise, this is a pointer subtraction.
+ 
+   // Do the raw subtraction part.
+-  llvm::Value *LHS
+-    = Builder.CreatePtrToInt(op.LHS, CGF.PtrDiffTy, "sub.ptr.lhs.cast");
+-  llvm::Value *RHS
+-    = Builder.CreatePtrToInt(op.RHS, CGF.PtrDiffTy, "sub.ptr.rhs.cast");
++  llvm::Type *PtrDiffTy =
++      CGF.ConvertType(CGF.getContext().getPointerDiffType());
++  llvm::Value *LHS =
++      Builder.CreatePtrToInt(op.LHS, PtrDiffTy, "sub.ptr.lhs.cast");
++  llvm::Value *RHS =
++      Builder.CreatePtrToInt(op.RHS, PtrDiffTy, "sub.ptr.rhs.cast");
+   Value *diffInChars = Builder.CreateSub(LHS, RHS, "sub.ptr.sub");
+ 
+   // Okay, figure out the element size.
+@@ -4487,6 +4489,9 @@ Value *ScalarExprEmitter::EmitSub(const BinOpInfo &op) {
+   // Otherwise, do a full sdiv. This uses the "exact" form of sdiv, since
+   // pointer difference in C is only defined in the case where both operands
+   // are pointing to elements of an array.
++  if (divisor->getType() != PtrDiffTy)
++    divisor = Builder.CreateZExtOrTrunc(divisor, PtrDiffTy,
++                                        "sub.ptr.divisor.cast");
+   return Builder.CreateExactSDiv(diffInChars, divisor, "sub.ptr.div");
+ }
+ 
+diff --git a/lib/CodeGen/CGVTables.cpp b/lib/CodeGen/CGVTables.cpp
+index 7faf6821..94876d95 100644
+--- a/lib/CodeGen/CGVTables.cpp
++++ b/lib/CodeGen/CGVTables.cpp
+@@ -718,6 +718,14 @@ llvm::Type *CodeGenModule::getVTableComponentType() const {
+   return GlobalsInt8PtrTy;
+ }
+ 
++llvm::IntegerType *CodeGenModule::getVTableOffsetStorageType() const {
++  llvm::Type *ComponentTy = getVTableComponentType();
++  if (auto *PointerTy = llvm::dyn_cast<llvm::PointerType>(ComponentTy))
++    return llvm::cast<llvm::IntegerType>(
++        getDataLayout().getIntPtrType(PointerTy));
++  return llvm::cast<llvm::IntegerType>(ComponentTy);
++}
++
+ llvm::Type *CodeGenVTables::getVTableComponentType() const {
+   return CGM.getVTableComponentType();
+ }
+@@ -726,7 +734,8 @@ static void AddPointerLayoutOffset(const CodeGenModule &CGM,
+                                    ConstantArrayBuilder &builder,
+                                    CharUnits offset) {
+   builder.add(llvm::ConstantExpr::getIntToPtr(
+-      llvm::ConstantInt::get(CGM.PtrDiffTy, offset.getQuantity()),
++      llvm::ConstantInt::get(CGM.getVTableOffsetStorageType(),
++                             offset.getQuantity()),
+       CGM.GlobalsInt8PtrTy));
+ }
+ 
+diff --git a/lib/CodeGen/CodeGenModule.cpp b/lib/CodeGen/CodeGenModule.cpp
+index eb8d3cee..0388c6a4 100644
+--- a/lib/CodeGen/CodeGenModule.cpp
++++ b/lib/CodeGen/CodeGenModule.cpp
+@@ -356,19 +356,33 @@ CodeGenModule::CodeGenModule(ASTContext &C,
+   BFloatTy = llvm::Type::getBFloatTy(LLVMContext);
+   FloatTy = llvm::Type::getFloatTy(LLVMContext);
+   DoubleTy = llvm::Type::getDoubleTy(LLVMContext);
+-  PointerWidthInBits = C.getTargetInfo().getPointerWidth(LangAS::Default);
++  const TargetInfo &TargetInfo = C.getTargetInfo();
++  PointerWidthInBits = TargetInfo.getPointerWidth(LangAS::Default);
++  PointerSizeInBytes =
++      C.toCharUnitsFromBits(PointerWidthInBits).getQuantity();
+   PointerAlignInBytes =
+-      C.toCharUnitsFromBits(C.getTargetInfo().getPointerAlign(LangAS::Default))
++      C.toCharUnitsFromBits(TargetInfo.getPointerAlign(LangAS::Default))
+           .getQuantity();
+   SizeSizeInBytes =
+-    C.toCharUnitsFromBits(C.getTargetInfo().getMaxPointerWidth()).getQuantity();
++      C.toCharUnitsFromBits(TargetInfo.getTypeWidth(TargetInfo.getSizeType()))
++          .getQuantity();
++  SizeAlignInBytes =
++      C.toCharUnitsFromBits(TargetInfo.getTypeAlign(TargetInfo.getSizeType()))
++          .getQuantity();
++  IntSizeInBytes =
++      C.toCharUnitsFromBits(TargetInfo.getIntWidth()).getQuantity();
+   IntAlignInBytes =
+-    C.toCharUnitsFromBits(C.getTargetInfo().getIntAlign()).getQuantity();
++      C.toCharUnitsFromBits(TargetInfo.getIntAlign()).getQuantity();
+   CharTy =
+-    llvm::IntegerType::get(LLVMContext, C.getTargetInfo().getCharWidth());
+-  IntTy = llvm::IntegerType::get(LLVMContext, C.getTargetInfo().getIntWidth());
+-  IntPtrTy = llvm::IntegerType::get(LLVMContext,
+-    C.getTargetInfo().getMaxPointerWidth());
++      llvm::IntegerType::get(LLVMContext, TargetInfo.getCharWidth());
++  IntTy = llvm::IntegerType::get(LLVMContext, TargetInfo.getIntWidth());
++  IntPtrTy = llvm::IntegerType::get(
++      LLVMContext, TargetInfo.getTypeWidth(TargetInfo.getIntPtrType()));
++  SizeTy = llvm::IntegerType::get(
++      LLVMContext, TargetInfo.getTypeWidth(TargetInfo.getSizeType()));
++  PtrDiffTy = llvm::IntegerType::get(
++      LLVMContext,
++      TargetInfo.getTypeWidth(TargetInfo.getPtrDiffType(LangAS::Default)));
+   Int8PtrTy = llvm::PointerType::get(LLVMContext,
+                                      C.getTargetAddressSpace(LangAS::Default));
+   const llvm::DataLayout &DL = M.getDataLayout();
+diff --git a/lib/CodeGen/CodeGenModule.h b/lib/CodeGen/CodeGenModule.h
+index 0956296e..72b358fb 100644
+--- a/lib/CodeGen/CodeGenModule.h
++++ b/lib/CodeGen/CodeGenModule.h
+@@ -1597,6 +1597,7 @@ public:
+                               const VTableLayout &VTLayout);
+ 
+   llvm::Type *getVTableComponentType() const;
++  llvm::IntegerType *getVTableOffsetStorageType() const;
+ 
+   /// Generate a cross-DSO type identifier for MD.
+   llvm::ConstantInt *CreateCrossDsoCfiTypeId(llvm::Metadata *MD);
+diff --git a/lib/CodeGen/CodeGenTypeCache.h b/lib/CodeGen/CodeGenTypeCache.h
+index e273ebe3..11eef05e 100644
+--- a/lib/CodeGen/CodeGenTypeCache.h
++++ b/lib/CodeGen/CodeGenTypeCache.h
+@@ -44,12 +44,12 @@ struct CodeGenTypeCache {
+   /// char
+   llvm::IntegerType *CharTy;
+ 
+-  /// intptr_t, size_t, and ptrdiff_t, which we assume are the same size.
+-  union {
+-    llvm::IntegerType *IntPtrTy;
+-    llvm::IntegerType *SizeTy;
+-    llvm::IntegerType *PtrDiffTy;
+-  };
++  /// intptr_t, size_t, and ptrdiff_t.  Most targets give these types the same
++  /// width, but keeping separate entries also supports targets whose generic
++  /// pointer, size_t, and ptrdiff_t widths intentionally differ.
++  llvm::IntegerType *IntPtrTy;
++  llvm::IntegerType *SizeTy;
++  llvm::IntegerType *PtrDiffTy;
+ 
+   /// void*, void** in the target's default address space (often 0)
+   union {
+@@ -77,10 +77,8 @@ struct CodeGenTypeCache {
+ 
+   /// The size and alignment of the builtin C type 'int'.  This comes
+   /// up enough in various ABI lowering tasks to be worth pre-computing.
+-  union {
+-    unsigned char IntSizeInBytes;
+-    unsigned char IntAlignInBytes;
+-  };
++  unsigned char IntSizeInBytes;
++  unsigned char IntAlignInBytes;
+   CharUnits getIntSize() const {
+     return CharUnits::fromQuantity(IntSizeInBytes);
+   }
+@@ -92,16 +90,12 @@ struct CodeGenTypeCache {
+   unsigned char PointerWidthInBits;
+ 
+   /// The size and alignment of a pointer into the generic address space.
+-  union {
+-    unsigned char PointerAlignInBytes;
+-    unsigned char PointerSizeInBytes;
+-  };
++  unsigned char PointerAlignInBytes;
++  unsigned char PointerSizeInBytes;
+ 
+   /// The size and alignment of size_t.
+-  union {
+-    unsigned char SizeSizeInBytes; // sizeof(size_t)
+-    unsigned char SizeAlignInBytes;
+-  };
++  unsigned char SizeSizeInBytes; // sizeof(size_t)
++  unsigned char SizeAlignInBytes;
+ 
+   LangAS ASTAllocaAddressSpace;
+ 
 diff --git a/lib/CodeGen/ItaniumCXXABI.cpp b/lib/CodeGen/ItaniumCXXABI.cpp
-index 7c463f5..e41f33d 100644
+index 7c463f51..fdde5acc 100644
 --- a/lib/CodeGen/ItaniumCXXABI.cpp
 +++ b/lib/CodeGen/ItaniumCXXABI.cpp
-@@ -55,6 +55,17 @@ protected:
+@@ -55,6 +55,27 @@ protected:
    bool UseARMGuardVarABI;
    bool Use32BitVTableOffsetABI;
  
 +  llvm::IntegerType *getMemberPointerIntTy() const {
-+    const llvm::Triple &Triple = CGM.getTarget().getTriple();
-+    if (Triple.getArch() == llvm::Triple::msp430) {
-+      if (Triple.getVendorName() == "stc51")
-+        return CGM.Int16Ty;
-+      if (Triple.getVendorName() == "stc")
-+        return llvm::IntegerType::get(CGM.getLLVMContext(), 24);
-+    }
++    if (CGM.getTarget().hasFeature("stc-mcs51"))
++      return CGM.Int16Ty;
++    if (CGM.getTarget().hasFeature("stc-mcs251"))
++      return llvm::IntegerType::get(CGM.getLLVMContext(), 24);
 +    return CGM.PtrDiffTy;
++  }
++
++  llvm::Constant *coerceMemberPointerAdjustment(
++      llvm::Constant *Adjustment) const {
++    if (!Adjustment)
++      return nullptr;
++    llvm::IntegerType *MemberPointerIntTy = getMemberPointerIntTy();
++    if (Adjustment->getType() == MemberPointerIntTy)
++      return Adjustment;
++    const llvm::APInt &Value = cast<llvm::ConstantInt>(Adjustment)->getValue();
++    return llvm::ConstantInt::get(
++        MemberPointerIntTy,
++        Value.sextOrTrunc(MemberPointerIntTy->getBitWidth()));
 +  }
 +
    ItaniumMangleContext &getMangleContext() {
      return cast<ItaniumMangleContext>(CodeGen::CGCXXABI::getMangleContext());
    }
-@@ -595,9 +606,10 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
+@@ -595,9 +616,10 @@ CodeGen::CGCXXABI *CodeGen::CreateItaniumCXXABI(CodeGenModule &CGM) {
  
  llvm::Type *
  ItaniumCXXABI::ConvertMemberPointerType(const MemberPointerType *MPT) {
@@ -311,7 +547,7 @@ index 7c463f5..e41f33d 100644
  }
  
  /// In the Itanium and ARM ABIs, method pointers have the form:
-@@ -631,7 +643,16 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+@@ -631,7 +653,15 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
    auto *RD =
        cast<CXXRecordDecl>(MPT->getClass()->castAs<RecordType>()->getDecl());
  
@@ -319,17 +555,16 @@ index 7c463f5..e41f33d 100644
 +  llvm::IntegerType *MemberPointerIntTy = getMemberPointerIntTy();
 +  llvm::Constant *ptrdiff_1 = llvm::ConstantInt::get(MemberPointerIntTy, 1);
 +
-+  const llvm::Triple &TargetTriple = CGM.getTarget().getTriple();
 +  const bool UseSTCMCS51ProgramFunctionPointers =
-+      TargetTriple.getArch() == llvm::Triple::msp430 &&
-+      TargetTriple.getVendorName() == "stc51";
++      CGM.getTarget().hasFeature("stc-mcs51");
 +  llvm::PointerType *CalleePtrTy = CGF.UnqualPtrTy;
 +  if (UseSTCMCS51ProgramFunctionPointers)
-+    CalleePtrTy = llvm::PointerType::get(CGM.getLLVMContext(), 1);
++    CalleePtrTy = llvm::PointerType::get(
++        CGM.getLLVMContext(), CGM.getDataLayout().getProgramAddressSpace());
  
    llvm::BasicBlock *FnVirtual = CGF.createBasicBlock("memptr.virtual");
    llvm::BasicBlock *FnNonVirtual = CGF.createBasicBlock("memptr.nonvirtual");
-@@ -685,7 +706,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+@@ -685,7 +715,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
      VTableOffset = Builder.CreateSub(VTableOffset, ptrdiff_1);
    if (Use32BitVTableOffsetABI) {
      VTableOffset = Builder.CreateTrunc(VTableOffset, CGF.Int32Ty);
@@ -338,7 +573,7 @@ index 7c463f5..e41f33d 100644
    }
  
    // Check the address of the function pointer if CFI on member function
-@@ -788,13 +809,18 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+@@ -788,13 +818,18 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
      }
    } // End of sanitizer scope
  
@@ -358,7 +593,7 @@ index 7c463f5..e41f33d 100644
  
    // Check the function pointer if CFI on member function pointers is enabled.
    if (ShouldEmitCFICheck) {
-@@ -833,7 +859,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+@@ -833,7 +868,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
  
    // We're done.
    CGF.EmitBlock(FnEnd);
@@ -367,7 +602,7 @@ index 7c463f5..e41f33d 100644
    CalleePtr->addIncoming(VirtualFn, FnVirtual);
    CalleePtr->addIncoming(NonVirtualFn, FnNonVirtual);
  
-@@ -864,7 +890,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
+@@ -864,7 +899,7 @@ CGCallee ItaniumCXXABI::EmitLoadOfMemberFunctionPointer(
  llvm::Value *ItaniumCXXABI::EmitMemberDataPointerAddress(
      CodeGenFunction &CGF, const Expr *E, Address Base, llvm::Value *MemPtr,
      const MemberPointerType *MPT) {
@@ -376,7 +611,7 @@ index 7c463f5..e41f33d 100644
  
    CGBuilderTy &Builder = CGF.Builder;
  
-@@ -946,7 +972,8 @@ ItaniumCXXABI::EmitMemberPointerConversion(CodeGenFunction &CGF,
+@@ -946,7 +981,8 @@ ItaniumCXXABI::EmitMemberPointerConversion(CodeGenFunction &CGF,
        // Check whether we have a virtual offset or a pointer to a function.
        assert(UseARMMethodPtrABI && "ARM ABI expected");
        llvm::Value *Adj = Builder.CreateExtractValue(src, 1, "memptr.adj");
@@ -386,7 +621,27 @@ index 7c463f5..e41f33d 100644
        llvm::Value *AndVal = Builder.CreateAnd(Adj, Ptrdiff_1);
        llvm::Value *IsVirtualOffset =
            Builder.CreateIsNotNull(AndVal, "is.virtual.offset");
-@@ -1099,12 +1126,14 @@ ItaniumCXXABI::EmitMemberPointerConversion(const CastExpr *E,
+@@ -973,7 +1009,8 @@ ItaniumCXXABI::EmitMemberPointerConversion(CodeGenFunction &CGF,
+   // Under Itanium, reinterprets don't require any additional processing.
+   if (E->getCastKind() == CK_ReinterpretMemberPointer) return src;
+ 
+-  llvm::Constant *adj = getMemberPointerAdjustment(E);
++  llvm::Constant *adj =
++      coerceMemberPointerAdjustment(getMemberPointerAdjustment(E));
+   if (!adj) return src;
+ 
+   bool isDerivedToBase = (E->getCastKind() == CK_DerivedToBaseMemberPointer);
+@@ -1058,7 +1095,8 @@ ItaniumCXXABI::EmitMemberPointerConversion(const CastExpr *E,
+   if (E->getCastKind() == CK_ReinterpretMemberPointer) return src;
+ 
+   // If the adjustment is trivial, we don't need to do anything.
+-  llvm::Constant *adj = getMemberPointerAdjustment(E);
++  llvm::Constant *adj =
++      coerceMemberPointerAdjustment(getMemberPointerAdjustment(E));
+   if (!adj) return src;
+ 
+   bool isDerivedToBase = (E->getCastKind() == CK_DerivedToBaseMemberPointer);
+@@ -1099,12 +1137,14 @@ ItaniumCXXABI::EmitMemberPointerConversion(const CastExpr *E,
  
  llvm::Constant *
  ItaniumCXXABI::EmitNullMemberPointer(const MemberPointerType *MPT) {
@@ -403,7 +658,7 @@ index 7c463f5..e41f33d 100644
    llvm::Constant *Values[2] = { Zero, Zero };
    return llvm::ConstantStruct::getAnon(Values);
  }
-@@ -1115,7 +1144,8 @@ ItaniumCXXABI::EmitMemberDataPointer(const MemberPointerType *MPT,
+@@ -1115,7 +1155,8 @@ ItaniumCXXABI::EmitMemberDataPointer(const MemberPointerType *MPT,
    // Itanium C++ ABI 2.3:
    //   A pointer to data member is an offset from the base address of
    //   the class object containing it, represented as a ptrdiff_t
@@ -413,7 +668,7 @@ index 7c463f5..e41f33d 100644
  }
  
  llvm::Constant *
-@@ -1128,6 +1158,7 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+@@ -1128,6 +1169,7 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
    assert(MD->isInstance() && "Member function must not be static!");
  
    CodeGenTypes &Types = CGM.getTypes();
@@ -421,7 +676,7 @@ index 7c463f5..e41f33d 100644
  
    // Get the function pointer (or index if this is a virtual function).
    llvm::Constant *MemPtr[2];
-@@ -1170,20 +1201,21 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+@@ -1170,20 +1212,21 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
            CGM.getCodeGenOpts().PointerAuth.CXXMemberFunctionPointers;
        if (Schema)
          MemPtr[0] = llvm::ConstantExpr::getPtrToInt(
@@ -448,7 +703,7 @@ index 7c463f5..e41f33d 100644
                                           ThisAdjustment.getQuantity());
      }
    } else {
-@@ -1196,12 +1228,12 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
+@@ -1196,12 +1239,12 @@ llvm::Constant *ItaniumCXXABI::BuildMemberPointer(const CXXMethodDecl *MD,
      } else {
        // Use an arbitrary non-function type to tell GetAddrOfFunction that the
        // function type is incomplete.
@@ -464,7 +719,7 @@ index 7c463f5..e41f33d 100644
                                         (UseARMMethodPtrABI ? 2 : 1) *
                                         ThisAdjustment.getQuantity());
    }
-@@ -1316,7 +1348,7 @@ ItaniumCXXABI::EmitMemberPointerIsNotNull(CodeGenFunction &CGF,
+@@ -1316,7 +1359,7 @@ ItaniumCXXABI::EmitMemberPointerIsNotNull(CodeGenFunction &CGF,
  
    /// For member data pointers, this is just a check against -1.
    if (MPT->isMemberDataPointer()) {
@@ -473,8 +728,108 @@ index 7c463f5..e41f33d 100644
      llvm::Value *NegativeOne =
        llvm::Constant::getAllOnesValue(MemPtr->getType());
      return Builder.CreateICmpNE(MemPtr, NegativeOne, "memptr.tobool");
+@@ -1374,16 +1417,24 @@ void ItaniumCXXABI::emitVirtualObjectDelete(CodeGenFunction &CGF,
+     // Derive the complete-object pointer, which is what we need
+     // to pass to the deallocation function.
+ 
+-    // Grab the vtable pointer as an intptr_t*.
++    // Grab the vtable pointer.  In a pointer-layout vtable, offsets occupy
++    // one pointer-sized component even when C intptr_t/ptrdiff_t is wider.
+     auto *ClassDecl =
+         cast<CXXRecordDecl>(ElementType->castAs<RecordType>()->getDecl());
+     llvm::Value *VTable = CGF.GetVTablePtr(Ptr, CGF.UnqualPtrTy, ClassDecl);
+ 
+     // Track back to entry -2 and pull out the offset there.
++    llvm::IntegerType *OffsetStorageTy = CGM.getVTableOffsetStorageType();
+     llvm::Value *OffsetPtr = CGF.Builder.CreateConstInBoundsGEP1_64(
+-        CGF.IntPtrTy, VTable, -2, "complete-offset.ptr");
+-    llvm::Value *Offset = CGF.Builder.CreateAlignedLoad(CGF.IntPtrTy, OffsetPtr,
+-                                                        CGF.getPointerAlign());
++        OffsetStorageTy, VTable, -2, "complete-offset.ptr");
++    CharUnits OffsetAlign =
++        CGM.getItaniumVTableContext().isRelativeLayout()
++            ? CharUnits::fromQuantity(4)
++            : CGF.getPointerAlign();
++    llvm::Value *Offset = CGF.Builder.CreateAlignedLoad(
++        OffsetStorageTy, OffsetPtr, OffsetAlign, "complete-offset");
++    Offset = CGF.Builder.CreateSExtOrTrunc(Offset, CGF.PtrDiffTy,
++                                           "complete-offset.ext");
+ 
+     // Apply the offset.
+     llvm::Value *CompletePtr = Ptr.emitRawPointer(CGF);
+@@ -1759,8 +1810,7 @@ llvm::Value *ItaniumCXXABI::emitDynamicCastToVoid(CodeGenFunction &CGF,
+     OffsetToTop = CGF.Builder.CreateAlignedLoad(
+         CGM.Int32Ty, OffsetToTop, CharUnits::fromQuantity(4), "offset.to.top");
+   } else {
+-    llvm::Type *PtrDiffLTy =
+-        CGF.ConvertType(CGF.getContext().getPointerDiffType());
++    llvm::IntegerType *OffsetStorageTy = CGM.getVTableOffsetStorageType();
+ 
+     // Get the vtable pointer.
+     llvm::Value *VTable =
+@@ -1768,9 +1818,11 @@ llvm::Value *ItaniumCXXABI::emitDynamicCastToVoid(CodeGenFunction &CGF,
+ 
+     // Get the offset-to-top from the vtable.
+     OffsetToTop =
+-        CGF.Builder.CreateConstInBoundsGEP1_64(PtrDiffLTy, VTable, -2ULL);
++        CGF.Builder.CreateConstInBoundsGEP1_64(OffsetStorageTy, VTable, -2ULL);
+     OffsetToTop = CGF.Builder.CreateAlignedLoad(
+-        PtrDiffLTy, OffsetToTop, CGF.getPointerAlign(), "offset.to.top");
++        OffsetStorageTy, OffsetToTop, CGF.getPointerAlign(), "offset.to.top");
++    OffsetToTop = CGF.Builder.CreateSExtOrTrunc(
++        OffsetToTop, CGF.PtrDiffTy, "offset.to.top.ext");
+   }
+   // Finally, add the offset to the pointer.
+   return CGF.Builder.CreateInBoundsGEP(CGF.Int8Ty, ThisAddr.emitRawPointer(CGF),
+@@ -1805,8 +1857,11 @@ ItaniumCXXABI::GetVirtualBaseClassOffset(CodeGenFunction &CGF,
+         CGF.Int32Ty, VBaseOffsetPtr, CharUnits::fromQuantity(4),
+         "vbase.offset");
+   } else {
++    llvm::IntegerType *OffsetStorageTy = CGM.getVTableOffsetStorageType();
+     VBaseOffset = CGF.Builder.CreateAlignedLoad(
+-        CGM.PtrDiffTy, VBaseOffsetPtr, CGF.getPointerAlign(), "vbase.offset");
++        OffsetStorageTy, VBaseOffsetPtr, CGF.getPointerAlign(), "vbase.offset");
++    VBaseOffset = CGF.Builder.CreateSExtOrTrunc(
++        VBaseOffset, CGM.PtrDiffTy, "vbase.offset.ext");
+   }
+   return VBaseOffset;
+ }
+@@ -2226,6 +2281,15 @@ CGCallee ItaniumCXXABI::getVirtualFunctionPointer(CodeGenFunction &CGF,
+     VFunc = VFuncLoad;
+   }
+ 
++  if (CGM.getTarget().hasFeature("stc-mcs51")) {
++    llvm::PointerType *ProgramPtrTy =
++        llvm::PointerType::get(CGM.getLLVMContext(),
++                               CGM.getDataLayout().getProgramAddressSpace());
++    if (VFunc->getType() != ProgramPtrTy)
++      VFunc = CGF.Builder.CreateAddrSpaceCast(VFunc, ProgramPtrTy,
++                                              "vfn.program");
++  }
++
+   CGPointerAuthInfo PointerAuth;
+   if (Schema) {
+     assert(VTableSlotPtr && "virtual function pointer not set");
+@@ -2371,12 +2435,14 @@ static llvm::Value *performTypeAdjustment(CodeGenFunction &CGF,
+           CGF.Builder.CreateAlignedLoad(CGF.Int32Ty, OffsetPtr,
+                                         CharUnits::fromQuantity(4));
+     } else {
+-      llvm::Type *PtrDiffTy =
+-          CGF.ConvertType(CGF.getContext().getPointerDiffType());
++      llvm::IntegerType *OffsetStorageTy =
++          CGF.CGM.getVTableOffsetStorageType();
+ 
+       // Load the adjustment offset from the vtable.
+-      Offset = CGF.Builder.CreateAlignedLoad(PtrDiffTy, OffsetPtr,
++      Offset = CGF.Builder.CreateAlignedLoad(OffsetStorageTy, OffsetPtr,
+                                              CGF.getPointerAlign());
++      Offset = CGF.Builder.CreateSExtOrTrunc(
++          Offset, CGF.PtrDiffTy, "vtable.adjustment.ext");
+     }
+     // Adjust our pointer.
+     ResultPtr = CGF.Builder.CreateInBoundsGEP(V.getElementType(),
 diff --git a/lib/Driver/ToolChains/Clang.cpp b/lib/Driver/ToolChains/Clang.cpp
-index 57b7d2b..9e5194b 100644
+index 57b7d2bd..9e5194bf 100644
 --- a/lib/Driver/ToolChains/Clang.cpp
 +++ b/lib/Driver/ToolChains/Clang.cpp
 @@ -4328,7 +4328,11 @@ static void RenderCharacterOptions(const ArgList &Args, const llvm::Triple &T,

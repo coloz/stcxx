@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mechanical dual-target Clang/LLVM-CBE regression for the STC C++ ABI."""
+"""Compatibility entry point for the authoritative STC C++ ABI checker."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import runpy
 import subprocess
 
 
@@ -22,6 +23,9 @@ PROFILES = {
         "member_bits": 16,
         "data_member_bytes": 2,
         "method_member_bytes": 4,
+        "size_bits": 16,
+        "array_cookie_bytes": 2,
+        "array_new_symbol": "_Znaj",
     },
     "mcs251": {
         "triple": "msp430-stc-none-eabi",
@@ -33,6 +37,9 @@ PROFILES = {
         "member_bits": 24,
         "data_member_bytes": 3,
         "method_member_bytes": 6,
+        "size_bits": 32,
+        "array_cookie_bytes": 4,
+        "array_new_symbol": "_Znam",
     },
 }
 
@@ -57,6 +64,18 @@ def run(argv: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def llvm_function(ir: str, symbol: str) -> str:
+    pattern = re.compile(
+        rf"^define\b[^{{]*@{re.escape(symbol)}\([^)]*\)[^{{]*\{{\n"
+        r"(?P<body>.*?)^\}",
+        re.MULTILINE | re.DOTALL,
+    )
+    matches = list(pattern.finditer(ir))
+    require(len(matches) == 1,
+            f"expected one LLVM definition for {symbol}, got {len(matches)}")
+    return matches[0].group(0)
 
 
 def main() -> int:
@@ -103,6 +122,11 @@ def main() -> int:
             probe_dir)
         run(common + ["-emit-llvm", "-c", str(probe), "-o", str(bc_path)],
             probe_dir)
+        verified_ir_path = output / f"{name}.verified.ll"
+        run([
+            str(clang), f"--target={profile['triple']}", "-x", "ir",
+            "-emit-llvm", "-S", str(bc_path), "-o", str(verified_ir_path),
+        ], probe_dir)
         run([str(cbe), str(bc_path), "-o", str(c_path)], probe_dir)
 
         ir = ir_path.read_text(encoding="utf-8")
@@ -124,6 +148,129 @@ def main() -> int:
         require("@bridge_data_member_apply" in ir
                 and "@bridge_method_member_apply" in ir,
                 f"{name} member-pointer apply probes are absent")
+
+        pointer_difference = llvm_function(ir, "bridge_pointer_difference")
+        scaled_pointer_difference = llvm_function(
+            ir, "bridge_scaled_pointer_difference"
+        )
+        pointer_difference_store = llvm_function(
+            ir, "bridge_pointer_difference_store"
+        )
+        pointer_difference_comparison = llvm_function(
+            ir, "bridge_pointer_difference_is_four"
+        )
+        pointer_difference_negative = llvm_function(
+            ir, "bridge_pointer_difference_negative"
+        )
+        pointer_difference_argument = llvm_function(
+            ir, "bridge_pointer_difference_argument"
+        )
+        for symbol, body in (
+            ("bridge_pointer_difference", pointer_difference),
+            ("bridge_scaled_pointer_difference", scaled_pointer_difference),
+            ("bridge_pointer_difference_store", pointer_difference_store),
+            ("bridge_pointer_difference_is_four", pointer_difference_comparison),
+            ("bridge_pointer_difference_negative", pointer_difference_negative),
+            ("bridge_pointer_difference_argument", pointer_difference_argument),
+        ):
+            require(body.count("ptrtoint ptr ") == 2
+                    and body.count(" to i32") >= 2
+                    and "sub i32" in body
+                    and "sub i24" not in body,
+                    f"{name} {symbol} did not compute ptrdiff_t in i32")
+        require("sdiv exact i32" in scaled_pointer_difference,
+                f"{name} scaled pointer subtraction lost its i32 division")
+        require("store i32" in pointer_difference_store
+                and "store i24" not in pointer_difference_store,
+                f"{name} pointer-difference store underwrites ptrdiff_t")
+        require("icmp eq i32" in pointer_difference_comparison
+                and "icmp eq i24" not in pointer_difference_comparison,
+                f"{name} pointer-difference comparison mixes integer widths")
+        argument_subtractions = re.findall(
+            r"^\s*(%[-A-Za-z$._0-9]+)\s*=\s*sub i32\s+"
+            r"%[-A-Za-z$._0-9]+,\s*%[-A-Za-z$._0-9]+\s*$",
+            pointer_difference_argument,
+            re.MULTILINE,
+        )
+        require(len(argument_subtractions) == 1,
+                f"{name} pointer-difference argument has an ambiguous i32 sub")
+        call_address_space = " addrspace(1)" if name == "mcs51" else ""
+        require(
+            re.search(
+                rf"\bcall{call_address_space} i32 "
+                rf"@bridge_pointer_difference_consume\(i32 noundef "
+                rf"{re.escape(argument_subtractions[0])}\)",
+                pointer_difference_argument,
+            ) is not None,
+            f"{name} pointer difference is not passed directly as i32 ptrdiff_t",
+        )
+
+        size_bits = int(profile["size_bits"])
+        cookie_bytes = int(profile["array_cookie_bytes"])
+        array_new_symbol = str(profile["array_new_symbol"])
+        array_new = llvm_function(ir, "bridge_array_new")
+        array_delete = llvm_function(ir, "bridge_array_delete")
+        require(
+            re.search(
+                rf"@bridge_array_new\(i{size_bits} noundef %[-A-Za-z$._0-9]+\)",
+                array_new,
+            ) is not None,
+            f"{name} new[] count is not the target size_t width",
+        )
+        require(
+            f"@llvm.umul.with.overflow.i{size_bits}" in array_new
+            and f"@llvm.uadd.with.overflow.i{size_bits}" in array_new,
+            f"{name} new[] size arithmetic escaped size_t width",
+        )
+        allocation = re.search(
+            rf"^\s*(%[-A-Za-z$._0-9]+)\s*=\s*call[^\n]*"
+            rf"@{array_new_symbol}\(i{size_bits} noundef ",
+            array_new,
+            re.MULTILINE,
+        )
+        require(allocation is not None,
+                f"{name} new[] did not call the size_t-width allocator")
+        assert allocation is not None
+        allocation_value = allocation.group(1)
+        require(
+            re.search(
+                rf"^\s*store\s+i{size_bits}\s+%[-A-Za-z$._0-9]+,\s*"
+                rf"ptr\s+{re.escape(allocation_value)}\b",
+                array_new,
+                re.MULTILINE,
+            ) is not None,
+            f"{name} new[] cookie store has the wrong width",
+        )
+        require(
+            re.search(
+                rf"getelementptr inbounds i8, ptr {re.escape(allocation_value)}, "
+                rf"i{size_bits} {cookie_bytes}\b",
+                array_new,
+            ) is not None,
+            f"{name} new[] data pointer does not skip the exact cookie size",
+        )
+        require(
+            re.search(
+                rf"getelementptr inbounds i8, ptr %[-A-Za-z$._0-9]+, "
+                rf"i{size_bits} -{cookie_bytes}\b",
+                array_delete,
+            ) is not None
+            and re.search(
+                rf"load i{size_bits}, ptr %[-A-Za-z$._0-9]+",
+                array_delete,
+            ) is not None,
+            f"{name} delete[] did not recover the exact size_t cookie",
+        )
+        require(
+            "overflow.i24" not in array_new
+            and "store i24" not in array_new
+            and "load i24" not in array_delete
+            and not re.search(r"\bi24\s+-?3\b", array_new + array_delete),
+            f"{name} retained the historical 24-bit/3-byte array cookie",
+        )
+        if name == "mcs51":
+            require("zext i24" not in ir,
+                    "MCS51 contains an invalid i24-to-i16 zero extension")
         if name == "mcs51":
             require("inttoptr i16" in ir and "to ptr addrspace(1)" in ir,
                     "MCS51 nonvirtual member call escaped program AS1")
@@ -154,8 +301,13 @@ def main() -> int:
             "ordinary_function_pointer": "PASS",
             "data_member_pointer_bytes": profile["data_member_bytes"],
             "method_member_pointer_bytes": profile["method_member_bytes"],
+            "pointer_difference_ir_width": 32,
+            "size_t_ir_width": size_bits,
+            "array_cookie_bytes": cookie_bytes,
+            "bitcode_verifier": "PASS",
             "llvm_ir_sha256": digest(ir_path),
             "bitcode_sha256": digest(bc_path),
+            "verified_llvm_ir_sha256": digest(verified_ir_path),
             "llvm_cbe_c_sha256": digest(c_path),
             "native_backend": "BLOCKED_FAIL_CLOSED",
         }
@@ -167,4 +319,9 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # Keep historical callers fail-closed by delegating to the one maintained
+    # checker instead of carrying a weaker, drifting second implementation.
+    runpy.run_path(
+        str(Path(__file__).with_name("check-stc-cpp-targets.py")),
+        run_name="__main__",
+    )

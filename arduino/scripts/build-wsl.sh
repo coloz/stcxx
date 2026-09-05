@@ -22,6 +22,10 @@ test ! -e "${build_root}" || {
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "${script_dir}/../.." && pwd)
+build_jobs=${STC_TOOLCHAIN_BUILD_JOBS:-4}
+case "${build_jobs}" in
+  ''|*[!0-9]*|0) echo "STC_TOOLCHAIN_BUILD_JOBS must be a positive integer" >&2; exit 2 ;;
+esac
 for command in git sha256sum cmake ninja make python3 patch tar; do
   command -v "${command}" >/dev/null || { echo "missing command: ${command}" >&2; exit 2; }
 done
@@ -60,14 +64,14 @@ build_clang() {
     )
   fi
   cmake "${cmake_args[@]}"
-  cmake --build "${build_root}/clang" --target clang --parallel
+  cmake --build "${build_root}/clang" --target clang --parallel "${build_jobs}"
 }
 
 build_llvm_cbe() {
   command -v llvm-config-20 >/dev/null || { echo "missing llvm-config-20" >&2; exit 2; }
   cmake -S "${repo_root}/toolchain/llvm-cbe" -B "${build_root}/llvm-cbe" -G Ninja \
     -DLLVM_DIR="$(llvm-config-20 --cmakedir)" -DCMAKE_BUILD_TYPE=Release
-  cmake --build "${build_root}/llvm-cbe" --target llvm-cbe --parallel
+  cmake --build "${build_root}/llvm-cbe" --target llvm-cbe --parallel "${build_jobs}"
 }
 
 build_sdcc() {

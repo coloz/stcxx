@@ -9,7 +9,7 @@ cbe_root="${repo_root}/toolchain/llvm-cbe"
 cbe_patch="${repo_root}/arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch"
 
 expected_llvm_commit=87f0227cb60147a26a1eeb4fb06e3b505e9c7261
-expected_patch_sha=97f1fd8a824e583456e3335935125a712b05f2b25613c6a352e2c7b3b8c68dcc
+expected_patch_sha=f8fda423712d808dd087d4e789b1e824911cde62d738078bf9325a898d8476c0
 expected_cbe_commit=83f1bea66c7415c701925470a2f7596b37153197
 expected_cbe_patch_sha=6a3e793f69ffdde98495935103545eebbeebdecb5edc3b853c341639199802ac
 
@@ -23,6 +23,12 @@ clang_patch_files=(
   lib/Basic/Targets/MSP430.cpp
   lib/Basic/Targets/MSP430.h
   lib/CodeGen/BackendUtil.cpp
+  lib/CodeGen/CGCall.cpp
+  lib/CodeGen/CGExprScalar.cpp
+  lib/CodeGen/CGVTables.cpp
+  lib/CodeGen/CodeGenModule.cpp
+  lib/CodeGen/CodeGenModule.h
+  lib/CodeGen/CodeGenTypeCache.h
   lib/CodeGen/ItaniumCXXABI.cpp
   lib/Driver/ToolChains/Clang.cpp
 )
