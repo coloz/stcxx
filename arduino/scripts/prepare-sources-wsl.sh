@@ -11,7 +11,7 @@ cbe_patch="${repo_root}/arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch"
 expected_llvm_commit=87f0227cb60147a26a1eeb4fb06e3b505e9c7261
 expected_patch_sha=f8fda423712d808dd087d4e789b1e824911cde62d738078bf9325a898d8476c0
 expected_cbe_commit=83f1bea66c7415c701925470a2f7596b37153197
-expected_cbe_patch_sha=6a3e793f69ffdde98495935103545eebbeebdecb5edc3b853c341639199802ac
+expected_cbe_patch_sha=0a332f0000aa9d335eb4c0b67bbd40b3020d9acf586c4279b5e8a0ecd2c3025f
 
 # Windows checkouts may materialize the patched files as CRLF.  Canonicalize
 # only the files named by the locked patches before applying them so ordinary
@@ -35,7 +35,9 @@ clang_patch_files=(
 for file in "${clang_patch_files[@]}"; do
   sed -i 's/\r$//' "${clang_root}/${file}"
 done
-sed -i 's/\r$//' "${cbe_root}/lib/Target/CBackend/CBackend.cpp"
+for file in CBackend.cpp CBackend.h; do
+  sed -i 's/\r$//' "${cbe_root}/lib/Target/CBackend/${file}"
+done
 
 test -d "${clang_root}"
 test -f "${clang_root}/lib/Basic/Targets/MSP430.cpp"

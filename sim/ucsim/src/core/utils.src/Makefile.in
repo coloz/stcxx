@@ -22,13 +22,4 @@ all: libs
 include $(top_srcdir)/src/lib.mk
 
 
-# Performing self-test
-# --------------------
-check:
-
-test:
-
-baseline:
-
-
 # End of utils.src/Makefile

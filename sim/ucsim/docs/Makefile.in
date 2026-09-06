@@ -35,7 +35,7 @@ all: docs
 
 docs: checkconf
 
-# Compiling and installing everything and running test
+# Compiling and installing everything
 # ---------------------------------------------------
 install: all installdirs
 	cp $(srcdir)/*.html $(DESTDIR)$(docdir)
@@ -53,19 +53,6 @@ uninstall:
 	rm -rf $(DESTDIR)$(docdir)
 	rm -rf $(DESTDIR)$(man1dir)/ucsim.1
 	rm -rf $(DESTDIR)$(man1dir)/serialview.1
-
-
-# Performing self-test
-# --------------------
-check:
-
-test baseline:
-	@true
-
-
-# Performing installation test
-# ----------------------------
-installcheck:
 
 
 # Creating installation directories

@@ -4,11 +4,11 @@ This document records what "all MCS-251 instructions are supported" means in
 this port.  It separates assembler completeness from compiler instruction
 selection and from hardware validation.
 
-## Current status
+## Recorded coverage
 
 The `sdas251` assembler covers the complete MCS-251 CPU instruction set
-represented by the Intel and STC instruction tables tracked in this
-repository:
+represented by the Intel and STC instruction tables used in the historical
+coverage review:
 
 - 65 of 65 instruction families;
 - 269 of 269 recorded legal operand forms;
@@ -18,8 +18,10 @@ repository:
 - range and operand diagnostics for representative invalid input.
 
 Therefore the assembler-level answer is **yes**: every instruction family and
-legal operand form in the repository's reviewed ISA matrix is accepted and
-checked against golden bytes in both opcode maps.
+legal operand form in the reviewed ISA matrix was accepted and checked
+against golden bytes in both opcode maps. Those project-specific fixtures
+have been removed from the distribution; these figures describe recorded
+coverage, not a test result produced by the current build.
 
 This does not mean that the C compiler deliberately emits all 269 forms.  A C
 backend selects instructions according to types, the ABI, register allocation
@@ -29,11 +31,11 @@ layer.  Compiler completeness is reported separately below.
 
 ## ISA matrix
 
-The canonical machine-readable matrix is
-[`sdas/as251/tests/instruction-forms.tsv`](../../sdas/as251/tests/instruction-forms.tsv).
-Its `reference` column ties each form to the Intel instruction tables.  The
-family manifest is
-[`instruction-families.txt`](../../sdas/as251/tests/instruction-families.txt).
+The following counts summarize the previous instruction-form matrix. Its
+machine-readable fixtures and test runners are no longer included. Current
+implementation sources are [`mcs251pst.c`](../../sdas/as251/mcs251pst.c),
+[`mcs251mch.c`](../../sdas/as251/mcs251mch.c) and
+[`mcs251adr.c`](../../sdas/as251/mcs251adr.c).
 
 | Group | Families | Legal forms |
 |---|---:|---:|
@@ -68,40 +70,19 @@ The complete family list, with the number of tested forms in parentheses, is:
 architectural instruction families and are consequently excluded from the
 65-family total.
 
-## Positive and negative assembler tests
+## Validation scope
 
-Run the complete assembler gate from a configured build directory:
-
-```sh
-make -C sdas/as251 check
-```
-
-The target performs five independent checks:
-
-1. assembles the reviewed golden-byte source;
-2. assembles all 269 legal forms in Source and Binary modes and compares every
-   emitted byte;
-3. verifies that the generated matrix, family manifest and assembler mnemonic
-   table agree;
-4. checks cross-object 24-bit relocations and Intel HEX addresses; and
-5. rejects invalid branch/page/region ranges, register numbers and widths,
-   indirect widths, displacement widths, increment steps, bit numbers and
-   push operands with a diagnostic.
-
-The negative suite is representative of each constrained operand class.  It
-does not claim to enumerate every possible malformed source string.
+The earlier assembler checks covered golden instruction bytes, Source/Binary
+maps, 24-bit relocations and representative invalid operands. Their removed
+`check` Makefile target is not a current build entry point. Building the
+assembler confirms compilation only; new ISA or diagnostic changes need
+separate validation against authoritative encodings and hardware behavior.
 
 ## Compiler-generated instructions
 
-The compiler gate is:
-
-```sh
-make -C src/mcs251 check
-make -C support/valdiag test-mcs251
-```
-
-It compiles the port and runtime sources in small, large, small stack-auto and
-large stack-auto configurations.  Current code-generation assertions cover:
+The removed project compiler gate covered small, large, small stack-auto and
+large stack-auto configurations. Its recorded code-generation assertions
+included:
 
 - native stepped `INC`/`DEC`;
 - native `MOVS`/`MOVZ` byte extension and `MOVH` high-word replacement;
@@ -118,9 +99,9 @@ large stack-auto configurations.  Current code-generation assertions cover:
 - model-correct spill placement and 16-bit SPX frames; and
 - unchanged MCS-51 pointer layout through the shared compiler paths.
 
-The validation-diagnostics suite also runs its positive and negative C cases
-under all four supported MCS-251 configurations.  These checks establish the
-currently promised basic compiler optimizations.  They do not establish that
+The separately retained validation-diagnostics framework has positive and
+negative C cases for the supported MCS-251 configurations. The earlier checks
+covered basic compiler optimizations. They did not establish that
 every legal assembler form is an optimization target, nor that instruction
 selection is optimal for every C expression.
 
@@ -146,6 +127,6 @@ selection is optimal for every C expression.
   communicates.  They do not prove cycle accuracy, peripheral completeness or
   optimal instruction selection.
 
-In short: assembler ISA coverage is complete against the tracked official
-matrix; compiler instruction selection and hardware validation have narrower,
-explicitly tested scopes.
+The recorded assembler coverage, compiler instruction selection and hardware
+validation describe distinct scopes. They should be reassessed when the
+implementation changes.

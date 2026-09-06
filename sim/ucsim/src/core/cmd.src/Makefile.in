@@ -23,13 +23,4 @@ include $(top_srcdir)/src/lib.mk
 
 cmdlex.cc: cmdlex.l cmdpars.y
 
-# Performing self-test
-# --------------------
-check:
-
-test:
-
-baseline:
-
-
 # End of cmd.src/Makefile.in

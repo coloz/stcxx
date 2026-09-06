@@ -460,7 +460,15 @@ findPrevUse (eBBlock *ebp, iCode *ic, operand *op,
                   /* to the last common dominator before defs/uses.    */
                   /* First, find the common dominators of all defs/uses */
                   unvisitBlocks (ebbs, count);
-                  used = newBitVect (count);
+                  /* The use being examined need not have been entered in
+                   * OP_USES yet (computeLiveRanges builds that information).
+                   * It must nevertheless be dominated by the initializer.
+                   * Seed both sets with this block instead of relying on a
+                   * possibly empty/stale defs/uses scan to provide a block.
+                   */
+                  dom = bitVectCopy (ebp->domVect);
+                  used = bitVectSetBit (newBitVect (count), ebp->bbnum);
+                  ebp->visited = 1;
                   for (i=0; i<iCodeKey; i++)
                     {
                       if (bitVectBitValue (OP_USES (op), i) ||
@@ -1285,4 +1293,3 @@ shortenLiveRanges (iCode *sic, ebbIndex *ebbi)
 
   return (change);
 }
-

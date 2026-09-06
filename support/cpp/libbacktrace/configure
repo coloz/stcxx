@@ -14133,7 +14133,6 @@ fi
 
 ac_config_files="$ac_config_files Makefile backtrace-supported.h"
 
-ac_config_files="$ac_config_files install-debuginfo-for-buildid.sh"
 
 
 # We need multilib support, but only if configuring for the target.
@@ -15215,7 +15214,6 @@ do
     "gstdint.h") CONFIG_COMMANDS="$CONFIG_COMMANDS gstdint.h" ;;
     "Makefile") CONFIG_FILES="$CONFIG_FILES Makefile" ;;
     "backtrace-supported.h") CONFIG_FILES="$CONFIG_FILES backtrace-supported.h" ;;
-    "install-debuginfo-for-buildid.sh") CONFIG_FILES="$CONFIG_FILES install-debuginfo-for-buildid.sh" ;;
     "default") CONFIG_COMMANDS="$CONFIG_COMMANDS default" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
@@ -16831,7 +16829,6 @@ else
 fi
 
  ;;
-    "install-debuginfo-for-buildid.sh":F) chmod +x install-debuginfo-for-buildid.sh ;;
     "default":C) if test -n "$CONFIG_FILES"; then
    if test -n "${with_target_subdir}"; then
      # Multilibs need MULTISUBDIR defined correctly in certain makefiles so
@@ -16896,4 +16893,3 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
 $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
-

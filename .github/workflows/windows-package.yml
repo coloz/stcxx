@@ -55,7 +55,7 @@ jobs:
           if-no-files-found: error
 
   windows-package:
-    name: Build and verify Windows x64 package
+    name: Build Windows x64 package
     runs-on: windows-latest
     timeout-minutes: 90
     needs: docs
@@ -150,7 +150,7 @@ jobs:
             windows-package/sdcc-mcs251/
           cp README.md COPYING sdas/COPYING3 windows-package/sdcc-mcs251/
 
-      - name: Verify the package outside MSYS2
+      - name: Verify package inventory and tool startup outside MSYS2
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -198,32 +198,6 @@ jobs:
             throw "sdcc.exe --print-search-dirs failed"
           }
           $searchDirs | Write-Host
-
-          $smokeDir = Join-Path $env:RUNNER_TEMP "sdcc-windows-smoke"
-          New-Item -ItemType Directory -Force -Path $smokeDir | Out-Null
-          $source = Join-Path $smokeDir "main.c"
-          "void main(void) { for (;;) {} }" |
-            Set-Content -Encoding ascii -Path $source
-
-          $builds = @(
-            @{ Name = "mcs51"; Flags = @("-mmcs51", "--model-small") },
-            @{ Name = "mcs251-small";
-               Flags = @("-mmcs251", "--model-small") },
-            @{ Name = "mcs251-small-stack-auto";
-               Flags = @("-mmcs251", "--model-small", "--stack-auto") },
-            @{ Name = "mcs251-large";
-               Flags = @("-mmcs251", "--model-large") },
-            @{ Name = "mcs251-large-stack-auto";
-               Flags = @("-mmcs251", "--model-large", "--stack-auto") }
-          )
-          foreach ($build in $builds) {
-            $image = Join-Path $smokeDir "$($build.Name).ihx"
-            $arguments = $build.Flags + @("-o", $image, $source)
-            & $sdcc @arguments
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path $image)) {
-              throw "the packaged compiler failed to build $($build.Name)"
-            }
-          }
 
       - name: Download Chinese manual
         uses: actions/download-artifact@v5

@@ -2,6 +2,13 @@
 /build-*/
 /out/
 /out.*/
+/out-*/
+/tmp/
 /arduino/.cache/
+/windows-build/
+/windows-package/
+/sdcc-build/
+/qemu-traces/
+/sdcc-mcs251-windows-x64-*.zip
 __pycache__/
 *.pyc

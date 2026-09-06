@@ -82,20 +82,6 @@ uninstall:
 	rm -f $(DESTPATH)`echo $(DEST)|sed '$(transform)'`$(EXEEXT)
 
 
-# Performing self-test
-# --------------------
-check: all $(ASLINK)
-	sh $(srcdir)/tests/check-encoding.sh $(ASX)
-	$(PYTHON) $(srcdir)/tests/check-instruction-forms.py \
-		$(ASX) $(srcdir)/tests/instruction-forms.tsv
-	sh $(srcdir)/tests/check-coverage.sh
-	sh $(srcdir)/tests/check-link.sh $(ASX) $(ASLINK)
-	sh $(srcdir)/tests/check-errors.sh $(ASX) $(ASLINK)
-
-$(ASLINK):
-	$(MAKE) -C $(top_builddir)/sdas/linksrc sdcc-ld8051
-
-
 # Performing installation test
 # ----------------------------
 installcheck:

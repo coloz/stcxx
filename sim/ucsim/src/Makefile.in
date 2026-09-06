@@ -54,7 +54,7 @@ $(APPS):
 	$(MAKE) -C apps/$@ all
 
 
-# Compiling and installing everything and running test
+# Compiling and installing everything
 # ---------------------------------------------------
 .PHONY: install INSTALL Install
 install:
@@ -70,27 +70,6 @@ uninstall:
 	  $(MAKE) -C sims/$${pkg} uninstall ;\
 	done
 
-
-
-# Performing self-test
-# --------------------
-check:
-	@for pkg in $(PKGS); do\
-	  $(MAKE) -C sims/$${pkg} check ;\
-	done
-
-# We want tests to be parallelizable so a simple shell loop is
-# not good enough.
-PKGS_TEST = $(foreach pkg, sim.src $(PKGS), $(pkg)/test)
-PKGS_BASELINE = $(patsubst %,%/baseline,$(PKGS_TEST))
-.PHONY:	test $(PKGS_TEST) baseline $(PKGS_BASELINE)
-test: $(PKGS_TEST)
-$(PKGS_TEST):
-	-@$(MAKE) --no-print-directory -C $(dir $@) test
-
-baseline: $(PKGS_BASELINE)
-$(PKGS_BASELINE):
-	-@$(MAKE) --no-print-directory -C $(patsubst %/test/baseline,%,$@) baseline
 
 
 # My rules

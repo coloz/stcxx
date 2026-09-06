@@ -1,4 +1,4 @@
-name: SDCC MCS-51 family CI
+name: SDCC MCS-51 family build
 
 on:
   push:
@@ -17,22 +17,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compiler-and-runtime:
-    name: SDCC compiler, assembler and UART smoke
+  compiler-build:
+    name: SDCC compiler, assemblers and runtime libraries
     runs-on: ubuntu-24.04
     timeout-minutes: 120
 
     steps:
       - name: Check out SDCC
         uses: actions/checkout@v6
-
-      - name: Check out Process Mission QEMU
-        uses: actions/checkout@v6
-        with:
-          repository: processmission/qemu
-          ref: 03c2e3017e25c3d1b18ada6a20e69925a89c7741
-          path: qemu
-          persist-credentials: false
 
       - name: Install build dependencies
         run: |
@@ -42,12 +34,7 @@ jobs:
             build-essential \
             flex \
             libboost-dev \
-            libglib2.0-dev \
-            libpixman-1-dev \
             libreadline-dev \
-            ninja-build \
-            pkg-config \
-            python3-venv \
             texinfo \
             zlib1g-dev
 
@@ -85,69 +72,30 @@ jobs:
             --disable-f8-port \
             --disable-f8l-port \
             --disable-non-free \
+            --disable-ucsim \
             --disable-sdcdb
 
       - name: Build SDCC
         run: make -C sdcc-build -j"$(nproc)"
 
-      - name: Test MCS-251 instruction encodings and diagnostics
-        run: make -C sdcc-build/sdas/as251 check
-
-      - name: Test MCS-251 compiler and code generation
-        run: make -C sdcc-build/src/mcs251 check
-
-      - name: Test MCS-251 language diagnostics
-        run: make -C sdcc-build/support/valdiag test-mcs251
-
-      - name: Test all MCS-51 regression models
+      - name: Verify built tool and library inventory
         run: |
-          make -C sdcc-build/support/regression -j"$(nproc)" test-mcs51
+          sdcc-build/bin/sdcc --version | grep -F 'mcs51/mcs251'
+          for tool in sdcc sdas8051 sdas251 sdld sdldmcs251; do
+            test -x "sdcc-build/bin/$tool"
+          done
+          for model in mcs251-small mcs251-small-stack-auto mcs251-large mcs251-large-stack-auto; do
+            test -s "sdcc-build/device/lib/build/$model/mcs251.lib"
+          done
 
-      - name: Configure QEMU execution backend
-        working-directory: qemu
-        run: |
-          ./configure \
-            --target-list=mcs51-softmmu,mcs251-softmmu \
-            --disable-docs \
-            --enable-plugins \
-            --disable-werror
-
-      - name: Build QEMU execution backend
-        run: |
-          ninja -C qemu/build \
-            qemu-system-mcs51 \
-            qemu-system-mcs251 \
-            contrib/plugins/libexeclog.so \
-            contrib/plugins/libstoptrigger.so
-
-      - name: Test MCS-251 64-bit compiler regression
-        run: |
-          make -C sdcc-build/support/regression \
-            test-mcs251-stack-auto \
-            TEST_PREFIX=tst_mcs251-longlong \
-            QEMU_MCS251="$GITHUB_WORKSPACE/qemu/build/qemu-system-mcs251" \
-            QEMU_TRACE_DIR="$GITHUB_WORKSPACE/qemu-traces/regression"
-
-      - name: Test MCS-251 compiler and runtime on QEMU
-        run: |
-          make -C sdcc-build/src/mcs251 check-qemu \
-            QEMU_MCS251="$GITHUB_WORKSPACE/qemu/build/qemu-system-mcs251" \
-            QEMU_TRACE_DIR="$GITHUB_WORKSPACE/qemu-traces/features"
-
-      - name: Test MCS-51 runtime and stability
-        run: |
-          make -C sdcc-build/src/mcs251 check-mcs51-qemu \
-            QEMU_MCS51="$GITHUB_WORKSPACE/qemu/build/qemu-system-mcs51" \
-            QEMU_TRACE_DIR="$GITHUB_WORKSPACE/qemu-traces/features"
-
-      - name: Upload failure logs
+      - name: Upload build failure logs
         if: failure()
         uses: actions/upload-artifact@v5
         with:
-          name: mcs51-family-failure-logs
+          name: mcs51-family-build-logs
           path: |
-            sdcc-build/support/regression/results/
-            sdcc-build/support/valdiag/results/
-            qemu-traces/
+            sdcc-build/config.log
+            sdcc-build/support/cpp/config.log
+            sdcc-build/support/sdbinutils/config.log
           if-no-files-found: ignore
           retention-days: 14

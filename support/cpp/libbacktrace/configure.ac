@@ -541,7 +541,6 @@ else
 fi
 
 AC_CONFIG_FILES(Makefile backtrace-supported.h)
-AC_CONFIG_FILES(install-debuginfo-for-buildid.sh, chmod +x install-debuginfo-for-buildid.sh)
 
 # We need multilib support, but only if configuring for the target.
 AC_CONFIG_COMMANDS([default],

@@ -58,6 +58,11 @@ ALLOWED_INTRINSIC_PREFIXES = (
 # intrinsics still fail closed.
 ALLOWED_INTRINSIC_NAMES = {
     "llvm.experimental.noalias.scope.decl",
+    # LLVM 20 lowers the C/C++ isinf()/isnan() builtins retained by Arduino
+    # Print::printFloat() to these exact scalar forms.  The pinned LLVM-CBE
+    # implements both types and rejects malformed operands or other widths.
+    "llvm.is.fpclass.f32",
+    "llvm.is.fpclass.f64",
 }
 
 FORBIDDEN_IR_PATTERNS = {
@@ -370,6 +375,218 @@ def extract_cbe_fcmp_helpers(
         "unrecognized LLVM-CBE floating comparison helper shape",
     )
     return helpers, names
+
+
+def extract_cbe_fp_constant_typedefs(
+    raw_prefix: str, payload: str
+) -> tuple[list[str], list[str]]:
+    """Retain only the pinned CBE's exact binary32/binary64 bit containers."""
+
+    specifications = (
+        ("ConstantFloatTy", "typedef uint32_t ConstantFloatTy;"),
+        ("ConstantDoubleTy", "typedef uint64_t ConstantDoubleTy;"),
+    )
+    unsupported = sorted(set(re.findall(
+        r"\bConstant(?:FP80|FP128)Ty\b", raw_prefix + payload
+    )))
+    require(
+        not unsupported,
+        "unsupported LLVM-CBE floating constant container(s): "
+        + ", ".join(unsupported),
+    )
+
+    declarations: list[str] = []
+    names: list[str] = []
+    for name, expected in specifications:
+        declaration_pattern = re.compile(
+            rf"^typedef[^;\n]*\b{re.escape(name)}\s*;\s*$", re.MULTILINE
+        )
+        observed = [match.group(0).strip()
+                    for match in declaration_pattern.finditer(raw_prefix)]
+        referenced = re.search(rf"\b{re.escape(name)}\b", payload) is not None
+        require(
+            len(observed) == (1 if referenced else 0),
+            f"LLVM-CBE {name} declaration does not match payload use",
+        )
+        if not referenced:
+            require(
+                re.search(rf"\b{re.escape(name)}\b", raw_prefix) is None,
+                f"unrecognized LLVM-CBE {name} declaration shape",
+            )
+            continue
+        require(
+            observed == [expected],
+            f"unsupported LLVM-CBE {name} declaration: {observed!r}",
+        )
+        require(
+            len(re.findall(rf"\b{re.escape(name)}\b", raw_prefix)) == 1,
+            f"unexpected LLVM-CBE {name} prefix reference",
+        )
+        declarations.append(expected)
+        names.append(name)
+    return declarations, names
+
+
+_CBE_FPCLASS_HELPERS = {
+    "llvm_cbe_is_fpclass_f32": """static __forceinline bool llvm_cbe_is_fpclass_f32(float value, uint32_t mask) {
+  union { float fp; uint32_t bits; } repr;
+  uint32_t magnitude;
+  uint32_t class_mask;
+  repr.fp = value;
+  magnitude = repr.bits & UINT32_C(0x7fffffff);
+  if (magnitude > UINT32_C(0x7f800000))
+    class_mask = (repr.bits & UINT32_C(0x00400000)) ? UINT32_C(0x002) : UINT32_C(0x001);
+  else if (magnitude == UINT32_C(0x7f800000))
+    class_mask = (repr.bits & UINT32_C(0x80000000)) ? UINT32_C(0x004) : UINT32_C(0x200);
+  else if (magnitude == 0)
+    class_mask = (repr.bits & UINT32_C(0x80000000)) ? UINT32_C(0x020) : UINT32_C(0x040);
+  else if (magnitude < UINT32_C(0x00800000))
+    class_mask = (repr.bits & UINT32_C(0x80000000)) ? UINT32_C(0x010) : UINT32_C(0x080);
+  else
+    class_mask = (repr.bits & UINT32_C(0x80000000)) ? UINT32_C(0x008) : UINT32_C(0x100);
+  return (mask & class_mask) != 0;
+}""",
+    "llvm_cbe_is_fpclass_f64": """static __forceinline bool llvm_cbe_is_fpclass_f64(double value, uint32_t mask) {
+  union { double fp; uint64_t bits; } repr;
+  uint64_t magnitude;
+  uint32_t class_mask;
+  repr.fp = value;
+  magnitude = repr.bits & UINT64_C(0x7fffffffffffffff);
+  if (magnitude > UINT64_C(0x7ff0000000000000))
+    class_mask = (repr.bits & UINT64_C(0x0008000000000000)) ? UINT32_C(0x002) : UINT32_C(0x001);
+  else if (magnitude == UINT64_C(0x7ff0000000000000))
+    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? UINT32_C(0x004) : UINT32_C(0x200);
+  else if (magnitude == 0)
+    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? UINT32_C(0x020) : UINT32_C(0x040);
+  else if (magnitude < UINT64_C(0x0010000000000000))
+    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? UINT32_C(0x010) : UINT32_C(0x080);
+  else
+    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? UINT32_C(0x008) : UINT32_C(0x100);
+  return (mask & class_mask) != 0;
+}""",
+}
+
+
+def extract_cbe_fpclass_helpers(
+    raw_prefix: str, payload: str
+) -> tuple[list[str], list[str]]:
+    """Retain exact helpers emitted by the locked scalar fpclass lowering."""
+
+    helper_pattern = re.compile(
+        r"^static __forceinline bool (llvm_cbe_is_fpclass_f(?:32|64))"
+        r"\([^\n]*\) \{\n.*?^\}\s*$",
+        re.MULTILINE | re.DOTALL,
+    )
+    observed: dict[str, str] = {}
+    for match in helper_pattern.finditer(raw_prefix):
+        name = match.group(1)
+        require(name not in observed, f"duplicate LLVM-CBE fpclass helper: {name}")
+        observed[name] = match.group(0).strip()
+
+    referenced = sorted(set(re.findall(
+        r"\b(llvm_cbe_is_fpclass_f(?:32|64))\s*\(", payload
+    )))
+    require(
+        referenced == sorted(observed),
+        "LLVM-CBE fpclass helper definitions do not match payload calls: "
+        f"defined {sorted(observed)!r}, referenced {referenced!r}",
+    )
+    residual = sorted(set(re.findall(
+        r"\bllvm_cbe_is_fpclass_[A-Za-z0-9_]+\b", raw_prefix + payload
+    )))
+    require(
+        residual == referenced,
+        f"unrecognized LLVM-CBE fpclass helper shape or width: {residual!r}",
+    )
+    for name, helper in observed.items():
+        require(
+            helper == _CBE_FPCLASS_HELPERS[name],
+            f"unsupported LLVM-CBE fpclass helper body: {name}",
+        )
+    names = sorted(observed)
+    return [_CBE_FPCLASS_HELPERS[name] for name in names], names
+
+
+def extract_cbe_native_string_header(
+    raw_prefix: str, payload: str
+) -> tuple[list[str], list[str]]:
+    """Bind lowered memory intrinsics to the target C library's native ABI."""
+
+    memory_names = ("memcpy", "memmove", "memset")
+    # Once <string.h> is present, every declaration owned by that header must
+    # come from SDCC.  LLVM IR types intentionally erase pointee qualifiers and
+    # may spell signed return types as unsigned integers, so retaining even a
+    # seemingly ABI-compatible CBE prototype can conflict with the native one.
+    string_names = (
+        "memccpy", "memchr", "memcmp", "memcpy", "memmove", "memset",
+        "memset_explicit", "strcat", "strchr", "strcmp", "strcoll",
+        "strcpy", "strcspn", "strdup", "strlen", "strncat", "strncmp",
+        "strncpy", "strndup", "strnlen", "strpbrk", "strrchr", "strsep",
+        "strspn", "strstr", "strtok", "strxfrm",
+    )
+    name_pattern = "|".join(string_names)
+    referenced = sorted(set(re.findall(
+        rf"\b({name_pattern})\s*\(", payload
+    )))
+    declaration_pattern = re.compile(
+        rf"^(?:extern\s+)?(?:void\s*\*|[A-Za-z_][A-Za-z0-9_]*)\s+"
+        rf"({name_pattern})\([^;{{}}\n]*\)\s*;\s*$",
+        re.MULTILINE,
+    )
+    definitions_pattern = re.compile(
+        rf"^(?:static\s+)?(?:void\s*\*|[A-Za-z_][A-Za-z0-9_]*)\s+"
+        rf"({name_pattern})\([^;{{}}\n]*\)\s*\{{\s*$",
+        re.MULTILINE,
+    )
+    declarations = sorted(set(declaration_pattern.findall(payload)))
+    definitions = sorted(set(definitions_pattern.findall(payload)))
+
+    exact_include = "#include <string.h>"
+    exact_count = len(re.findall(
+        r"^#include <string\.h>\s*$", raw_prefix, re.MULTILINE
+    ))
+    include_spellings = re.findall(
+        r"^\s*#\s*include\s*[<\"]string\.h[>\"]\s*$",
+        raw_prefix,
+        re.MULTILINE,
+    )
+    referenced_memory = sorted(set(referenced).intersection(memory_names))
+    require(
+        exact_count <= 1 and len(include_spellings) == exact_count,
+        "LLVM-CBE native <string.h> marker is not exact and unique: "
+        f"exact includes {exact_count}, all spellings {len(include_spellings)}",
+    )
+
+    if exact_count == 0:
+        # CBE emits ordinary source-level string calls and their IR-derived
+        # prototypes even when no memory intrinsic was lowered.  Those
+        # declarations must remain in the payload: synthesizing <string.h>
+        # here would replace their audited LLVM ABI with the target libc ABI.
+        # A direct call with neither a declaration nor a definition is instead
+        # the fail-closed signature of a missing intrinsic header marker.
+        locally_bound = set(declarations).union(definitions)
+        unbound = sorted(set(referenced).difference(locally_bound))
+        require(
+            not unbound,
+            "LLVM-CBE string calls lack both the native <string.h> marker "
+            f"and local declarations/definitions: {unbound!r}",
+        )
+        return [], []
+
+    # The exact include is CBE's positive marker that this translation unit
+    # lowered at least one llvm.mem* intrinsic.  In this mode the target
+    # string header owns every standard declaration, including ordinary
+    # source-level calls that happen to share the same translation unit.
+    require(
+        bool(referenced_memory),
+        "LLVM-CBE native <string.h> marker has no lowered memory call",
+    )
+    require(
+        not declarations and not definitions,
+        "LLVM-CBE emitted native memory function declaration/definition(s): "
+        f"declarations {declarations!r}, definitions {definitions!r}",
+    )
+    return [exact_include], referenced
 
 
 def normalize_cbe_function_typedefs(

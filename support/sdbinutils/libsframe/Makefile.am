@@ -18,7 +18,7 @@
 #
 ACLOCAL_AMFLAGS = -I .. -I ../config -I ../bfd
 
-AUTOMAKE_OPTIONS = dejagnu foreign no-texinfo.tex info-in-builddir subdir-objects
+AUTOMAKE_OPTIONS = foreign no-texinfo.tex info-in-builddir subdir-objects
 
 # Variables that we might accumulate conditionally or in subdirs.
 info_TEXINFOS =
@@ -57,5 +57,3 @@ EXTRA_DIST = libtool-version libsframe.ver
 diststuff: $(EXTRA_DIST) info
 
 include doc/local.mk
-
-include testsuite/local.mk

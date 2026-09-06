@@ -1,5 +1,10 @@
 # MCS251 / STC32G 官方示例取证与 clean-room 测试转化计划
 
+> Historical design plan: project-specific example fixtures and their `check` /
+> `check-qemu` runners have been removed. Paths and gate descriptions below
+> document the earlier plan and are not executable instructions for this tree.
+
+
 > 调查日期：2026-08-01（Asia/Shanghai）
 > 范围：只把 STC、Arm/Keil 第一方发布的 MCS251 / STC32G 示例、应用笔记和下载物作为外部语义来源，并以本地 QEMU `mcs251` / `stc32g144k246-evb` 的已实现能力划定可运行测试边界。本文件不把第三方或供应商代码直接纳入 SDCC 测试。
 
@@ -217,7 +222,7 @@ Timer、UART、GPIO、DSP32 和 TFPU 的公开实现摘要见 [QEMU 已建模外
 
 ## 10. 构建、运行与判定协议
 
-现有 [`src/mcs251/Makefile.in`](../../src/mcs251/Makefile.in) 已提供 `check` / `check-qemu`，默认寻找 `~/oss/qemu/builds/build-mcs251/qemu-system-mcs251`；[`src/mcs251/tests/check-qemu.py`](../../src/mcs251/tests/check-qemu.py) 已能用 `sdcc -mmcs251`、`--code-loc 0xff0000` 生成 HEX，在 `stc32g144k246-evb` 上运行，并以 UART `PASS`/`FAIL` 判定。新增例程测试应沿用这一入口但收紧协议：
+现有 [`src/mcs251/Makefile.in`](../../src/mcs251/Makefile.in) 已提供 `check` / `check-qemu`，默认寻找 `~/oss/qemu/builds/build-mcs251/qemu-system-mcs251`；`src/mcs251/tests/check-qemu.py` 已能用 `sdcc -mmcs251`、`--code-loc 0xff0000` 生成 HEX，在 `stc32g144k246-evb` 上运行，并以 UART `PASS`/`FAIL` 判定。新增例程测试应沿用这一入口但收紧协议：
 
 1. 每个固件输出唯一一行 `CASE:<stable-name>:PASS\n`；任何 `FAIL`、异常退出或固定 timeout 都失败。避免只搜索无上下文的 `PASS` 子串。
 2. 每个纯 C 语义案例至少跑当前默认优化和 `--opt-code-size` 两条 lane；结果必须一致。另设代码生成测试检查常量折叠、无效代码消除、冗余扩展/装载消除和已承诺的 native 指令，不把某一种合法指令序列过度固化。

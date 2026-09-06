@@ -1,5 +1,5 @@
 diff --git a/lib/Target/CBackend/CBackend.cpp b/lib/Target/CBackend/CBackend.cpp
-index f0056bc..9db97dc 100644
+index f0056bc..a5058b9 100644
 --- a/lib/Target/CBackend/CBackend.cpp
 +++ b/lib/Target/CBackend/CBackend.cpp
 @@ -291,7 +291,12 @@ raw_ostream &CWriter::printTypeString(raw_ostream &Out, Type *Ty,
@@ -119,19 +119,34 @@ index f0056bc..9db97dc 100644
      Ty = CE->getType();
      NeedsExplicitCast = true;
      break;
-@@ -1755,8 +1803,17 @@ void CWriter::writeOperand(Value *Operand, enum OperandContext Context) {
+@@ -1750,13 +1798,30 @@ void CWriter::writeOperand(Value *Operand, enum OperandContext Context) {
+   bool isAddressImplicit = InnerType.has_value();
+   // Global variables are referenced as their addresses by llvm
+   if (isAddressImplicit) {
++    const auto *Global = dyn_cast<GlobalVariable>(Operand);
++    bool IsConstantObject = Global && Global->isConstant();
++    unsigned ProgramAS = TheModule->getDataLayout().getProgramAddressSpace();
++    bool IsProgramPointer =
++        ProgramAS != 0 && Operand->getType()->isPointerTy() &&
++        cast<PointerType>(Operand->getType())->getAddressSpace() == ProgramAS;
+     // We can't directly declare a zero-sized variable in C, so
+     // printTypeNameForAddressableValue uses a single-byte type instead.
      // We fix up the pointer type here.
-     if (!isEmptyType(InnerType.value()) && !InnerType.value()->isFunctionTy())
-       Out << "(&";
+-    if (!isEmptyType(InnerType.value()) && !InnerType.value()->isFunctionTy())
+-      Out << "(&";
 -    else
 -      Out << "((void*)&";
-+    else {
-+      unsigned ProgramAS = TheModule->getDataLayout().getProgramAddressSpace();
-+      bool IsProgramPointer =
-+          ProgramAS != 0 && Operand->getType()->isPointerTy() &&
-+          cast<PointerType>(Operand->getType())->getAddressSpace() == ProgramAS;
-+      const auto *Global = dyn_cast<GlobalVariable>(Operand);
-+      bool IsConstantObject = Global && Global->isConstant();
++    if (!isEmptyType(InnerType.value()) && !InnerType.value()->isFunctionTy()) {
++      // LLVM opaque pointers have no pointee const qualifier.  Keep constant
++      // globals const as C objects, but explicitly convert their addresses to
++      // the unqualified generic pointer represented by the IR.  Without this
++      // boundary cast, assigning a constant global through a PHI/select to a
++      // generated void* silently relies on an implicit qualifier discard.
++      if (IsConstantObject && !IsProgramPointer)
++        Out << "((void*)(const void*)&";
++      else
++        Out << "(&";
++    } else {
 +      Out << (IsProgramPointer
 +                  ? "((llvm_cbe_program_pointer)&"
 +                  : (IsConstantObject ? "((const void*)&" : "((void*)&"));
@@ -139,8 +154,93 @@ index f0056bc..9db97dc 100644
    }
  
    writeOperandInternal(Operand, Context);
-@@ -2461,6 +2518,8 @@ void CWriter::generateHeader(Module &M) {
+@@ -2070,6 +2135,60 @@ static void defineForceInline(raw_ostream &Out) {
+   Out << "#endif\n\n";
+ }
+ 
++static void defineFPClassFloat(raw_ostream &Out) {
++  Out << "static __forceinline bool llvm_cbe_is_fpclass_f32(float value, "
++         "uint32_t mask) {\n"
++      << "  union { float fp; uint32_t bits; } repr;\n"
++      << "  uint32_t magnitude;\n"
++      << "  uint32_t class_mask;\n"
++      << "  repr.fp = value;\n"
++      << "  magnitude = repr.bits & UINT32_C(0x7fffffff);\n"
++      << "  if (magnitude > UINT32_C(0x7f800000))\n"
++      << "    class_mask = (repr.bits & UINT32_C(0x00400000)) ? "
++         "UINT32_C(0x002) : UINT32_C(0x001);\n"
++      << "  else if (magnitude == UINT32_C(0x7f800000))\n"
++      << "    class_mask = (repr.bits & UINT32_C(0x80000000)) ? "
++         "UINT32_C(0x004) : UINT32_C(0x200);\n"
++      << "  else if (magnitude == 0)\n"
++      << "    class_mask = (repr.bits & UINT32_C(0x80000000)) ? "
++         "UINT32_C(0x020) : UINT32_C(0x040);\n"
++      << "  else if (magnitude < UINT32_C(0x00800000))\n"
++      << "    class_mask = (repr.bits & UINT32_C(0x80000000)) ? "
++         "UINT32_C(0x010) : UINT32_C(0x080);\n"
++      << "  else\n"
++      << "    class_mask = (repr.bits & UINT32_C(0x80000000)) ? "
++         "UINT32_C(0x008) : UINT32_C(0x100);\n"
++      << "  return (mask & class_mask) != 0;\n"
++      << "}\n\n";
++}
++
++static void defineFPClassDouble(raw_ostream &Out) {
++  Out << "static __forceinline bool llvm_cbe_is_fpclass_f64(double value, "
++         "uint32_t mask) {\n"
++      << "  union { double fp; uint64_t bits; } repr;\n"
++      << "  uint64_t magnitude;\n"
++      << "  uint32_t class_mask;\n"
++      << "  repr.fp = value;\n"
++      << "  magnitude = repr.bits & UINT64_C(0x7fffffffffffffff);\n"
++      << "  if (magnitude > UINT64_C(0x7ff0000000000000))\n"
++      << "    class_mask = (repr.bits & UINT64_C(0x0008000000000000)) ? "
++         "UINT32_C(0x002) : UINT32_C(0x001);\n"
++      << "  else if (magnitude == UINT64_C(0x7ff0000000000000))\n"
++      << "    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? "
++         "UINT32_C(0x004) : UINT32_C(0x200);\n"
++      << "  else if (magnitude == 0)\n"
++      << "    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? "
++         "UINT32_C(0x020) : UINT32_C(0x040);\n"
++      << "  else if (magnitude < UINT64_C(0x0010000000000000))\n"
++      << "    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? "
++         "UINT32_C(0x010) : UINT32_C(0x080);\n"
++      << "  else\n"
++      << "    class_mask = (repr.bits & UINT64_C(0x8000000000000000)) ? "
++         "UINT32_C(0x008) : UINT32_C(0x100);\n"
++      << "  return (mask & class_mask) != 0;\n"
++      << "}\n\n";
++}
++
+ static void defineNanInf(raw_ostream &Out) {
+   // Define NaN and Inf as GCC builtins if using GCC
+   // From the GCC documentation:
+@@ -2342,6 +2461,10 @@ void CWriter::generateCompilerSpecificCode(raw_ostream &Out,
+     defineNoReturn(Out);
+   if (headerIncForceInline())
+     defineForceInline(Out);
++  if (headerIncFPClassFloat())
++    defineFPClassFloat(Out);
++  if (headerIncFPClassDouble())
++    defineFPClassDouble(Out);
+   if (headerIncExternalWeak())
+     defineExternalWeak(Out);
+   if (headerIncAttributeWeak())
+@@ -2383,6 +2506,8 @@ bool CWriter::doInitialization(Module &M) {
+   return false;
+ }
+ 
++static bool isNativeStringDeclaration(const Function &F);
++
+ bool CWriter::doFinalization(Module &M) {
+   // Output all code to the file
+   std::string methods = Out.str();
+@@ -2459,8 +2584,12 @@ void CWriter::generateHeader(Module &M) {
+   OutHeaders << "#include <stdint.h>\n"; // Sized integer support
+   if (headerIncMath())
      OutHeaders << "#include <math.h>\n";
++  if (headerIncString())
++    OutHeaders << "#include <string.h>\n";
    // Provide a definition for `bool' if not compiling with a C++ compiler.
    OutHeaders << "#ifndef __cplusplus\ntypedef unsigned char bool;\n#endif\n";
 +  if (M.getDataLayout().getProgramAddressSpace() != 0)
@@ -148,7 +248,114 @@ index f0056bc..9db97dc 100644
    OutHeaders << "\n";
  
    Out << "\n\n/* Global Declarations */\n";
-@@ -5007,8 +5066,13 @@ void CWriter::visitCallInst(CallInst &I) {
+@@ -2622,6 +2751,7 @@ void CWriter::generateHeader(Module &M) {
+           I->getName() == "rint" || I->getName() == "rintf" ||
+           I->getName() == "floor" || I->getName() == "floorf" ||
+           I->getName() == "ceil" || I->getName() == "ceilf")) ||
++        (headerIncString() && isNativeStringDeclaration(*I)) ||
+         I->getName() == "alloca" || I->getName() == "_alloca" ||
+         I->getName() == "_chkstk" || I->getName() == "__chkstk" ||
+         I->getName() == "___chkstk_ms")
+@@ -4861,6 +4991,74 @@ void CWriter::printIntrinsicDefinition(Function &F, raw_ostream &Out) {
+   printIntrinsicDefinition(funT, Opcode, OpName, Out);
+ }
+ 
++static unsigned getSTCNativeSizeTBits(const Module *M) {
++  if (!M)
++    return 0;
++
++  StringRef Triple = M->getTargetTriple();
++  if (Triple == "msp430-stc51-none-eabi")
++    return 16;
++  if (Triple == "msp430-stc-none-eabi")
++    return 32;
++  return 0;
++}
++
++static bool isSTCMemoryIntrinsic(Intrinsic::ID ID) {
++  return ID == Intrinsic::memcpy || ID == Intrinsic::memmove ||
++         ID == Intrinsic::memset;
++}
++
++static bool isNativeStringDeclaration(const Function &F) {
++  if (!F.isDeclaration())
++    return false;
++
++  StringRef Name = F.getName();
++  return Name == "memccpy" || Name == "memchr" || Name == "memcmp" ||
++         Name == "memcpy" || Name == "memmove" || Name == "memset" ||
++         Name == "memset_explicit" || Name == "strcat" ||
++         Name == "strchr" || Name == "strcmp" || Name == "strcoll" ||
++         Name == "strcpy" || Name == "strcspn" || Name == "strdup" ||
++         Name == "strlen" || Name == "strncat" || Name == "strncmp" ||
++         Name == "strncpy" || Name == "strndup" || Name == "strnlen" ||
++         Name == "strpbrk" || Name == "strrchr" || Name == "strsep" ||
++         Name == "strspn" || Name == "strstr" || Name == "strtok" ||
++         Name == "strxfrm";
++}
++
++void CWriter::validateSTCMemoryIntrinsic(CallInst &I, Intrinsic::ID ID) {
++  unsigned SizeTBits = getSTCNativeSizeTBits(TheModule);
++  if (SizeTBits == 0 || !isSTCMemoryIntrinsic(ID))
++    report_fatal_error("invalid STC memory intrinsic target", false);
++
++  if (I.arg_size() != 4)
++    report_fatal_error("invalid STC memory intrinsic operands", false);
++
++  Value *Length = I.getArgOperand(2);
++  auto *LengthTy = dyn_cast<IntegerType>(Length->getType());
++  if (!LengthTy)
++    report_fatal_error(
++        "STC memory intrinsic length does not match native size_t", false);
++
++  unsigned LengthBits = LengthTy->getBitWidth();
++  if (LengthBits != SizeTBits) {
++    auto *ConstantLength = dyn_cast<ConstantInt>(Length);
++    if (LengthBits <= SizeTBits || !ConstantLength)
++      report_fatal_error(
++          LengthBits > SizeTBits
++              ? "STC memory intrinsic dynamic length cannot be narrowed to "
++                "native size_t"
++              : "STC memory intrinsic length does not match native size_t",
++          false);
++    if (ConstantLength->getValue().getActiveBits() > SizeTBits)
++      report_fatal_error(
++          "STC memory intrinsic constant length exceeds native size_t", false);
++  }
++
++  auto *IsVolatile = dyn_cast<ConstantInt>(I.getArgOperand(3));
++  if (!IsVolatile || !IsVolatile->isZero())
++    report_fatal_error("volatile STC memory intrinsic is unsupported", false);
++}
++
+ bool CWriter::lowerIntrinsics(Function &F) {
+   bool LoweredAny = false;
+ 
+@@ -4910,6 +5108,7 @@ bool CWriter::lowerIntrinsics(Function &F) {
+           case Intrinsic::sqrt:
+           case Intrinsic::trunc:
+           case Intrinsic::trap:
++          case Intrinsic::is_fpclass:
+           case Intrinsic::stackprotector:
+           case Intrinsic::dbg_value:
+           case Intrinsic::dbg_declare:
+@@ -4923,6 +5122,15 @@ bool CWriter::lowerIntrinsics(Function &F) {
+             // We directly implement these intrinsics
+             break;
+ 
++          case Intrinsic::memcpy:
++          case Intrinsic::memmove:
++          case Intrinsic::memset:
++            if (getSTCNativeSizeTBits(TheModule) != 0) {
++              validateSTCMemoryIntrinsic(*CI, F->getIntrinsicID());
++              break;
++            }
++            [[fallthrough]];
++
+           default:
+             // All other intrinsic calls we must lower.
+             LoweredAny = true;
+@@ -5007,8 +5215,13 @@ void CWriter::visitCallInst(CallInst &I) {
        }
  
    if (NeedsCast) {
@@ -164,3 +371,129 @@ index f0056bc..9db97dc 100644
      writeOperand(Callee, ContextCasted);
      Out << ')';
    } else {
+@@ -5057,11 +5270,26 @@ void CWriter::visitCallInst(CallInst &I) {
+           /*isSigned=*/PAL.hasAttributeAtIndex(ArgNo + 1, Attribute::SExt));
+       Out << ')';
+     }
++    // A variadic parameter has no declared C type to coerce a literal to.
++    // STC int is 16 bits: emitting an LLVM i32 constant as plain "42" (or
++    // "42u") silently passes two bytes instead of four to native va_arg.
++    const bool STCVariadicInteger =
++        getSTCNativeSizeTBits(TheModule) != 0 && FTy->isVarArg() &&
++        ArgNo >= NumDeclaredParams && (*AI)->getType()->isIntegerTy();
++    if (STCVariadicInteger) {
++      if ((*AI)->getType()->getIntegerBitWidth() < 16)
++        report_fatal_error("STC variadic integer argument is narrower than promoted int", false);
++      Out << "((";
++      printTypeName(Out, (*AI)->getType(), false);
++      Out << ")";
++    }
+     // Check if the argument is expected to be passed by value.
+     if (I.getAttributes().hasAttributeAtIndex(ArgNo + 1, Attribute::ByVal))
+       writeOperandDeref(*AI);
+     else
+       writeOperand(*AI, ContextCasted);
++    if (STCVariadicInteger)
++      Out << ')';
+     PrintedArg = true;
+   }
+   Out << ')';
+@@ -5210,6 +5438,52 @@ bool CWriter::visitBuiltinCall(CallInst &I, Intrinsic::ID ID) {
+     headerUseTrap();
+     Out << "__builtin_trap()";
+     return true;
++  case Intrinsic::is_fpclass: {
++    if (I.arg_size() != 2 ||
++        !isa<ConstantInt>(I.getArgOperand(1)))
++      errorWithMessage("invalid llvm.is.fpclass operands");
++
++    Type *ValueTy = I.getArgOperand(0)->getType();
++    if (ValueTy->isFloatTy()) {
++      headerUseForceInline();
++      headerUseFPClassFloat();
++      Out << "llvm_cbe_is_fpclass_f32(";
++    } else if (ValueTy->isDoubleTy()) {
++      headerUseForceInline();
++      headerUseFPClassDouble();
++      Out << "llvm_cbe_is_fpclass_f64(";
++    } else {
++      errorWithMessage("unsupported llvm.is.fpclass type");
++    }
++    writeOperand(I.getArgOperand(0), ContextCasted);
++    Out << ", ";
++    writeOperand(I.getArgOperand(1), ContextCasted);
++    Out << ')';
++    return true;
++  }
++  case Intrinsic::memcpy:
++  case Intrinsic::memmove:
++  case Intrinsic::memset: {
++    validateSTCMemoryIntrinsic(I, ID);
++    headerUseString();
++
++    if (ID == Intrinsic::memcpy)
++      Out << "memcpy(";
++    else if (ID == Intrinsic::memmove)
++      Out << "memmove(";
++    else
++      Out << "memset(";
++
++    writeOperand(I.getArgOperand(0), ContextCasted);
++    Out << ", ";
++    if (ID == Intrinsic::memset)
++      Out << "(int)";
++    writeOperand(I.getArgOperand(1), ContextCasted);
++    Out << ", (size_t)";
++    writeOperand(I.getArgOperand(2), ContextCasted);
++    Out << ')';
++    return true;
++  }
+ 
+   // these use the normal function call emission
+   case Intrinsic::sadd_with_overflow:
+diff --git a/lib/Target/CBackend/CBackend.h b/lib/Target/CBackend/CBackend.h
+index 2468501..3585560 100644
+--- a/lib/Target/CBackend/CBackend.h
++++ b/lib/Target/CBackend/CBackend.h
+@@ -100,6 +100,7 @@ class CWriter : public FunctionPass, public InstVisitor<CWriter> {
+     bool Setjmp : 1;
+     bool Limits : 1;
+     bool Math : 1;
++    bool String : 1;
+ 
+     // printModuleTypes()
+     bool BitCastUnion : 1;
+@@ -124,6 +125,8 @@ class CWriter : public FunctionPass, public InstVisitor<CWriter> {
+     bool ConstantFP80Ty : 1;
+     bool ConstantFP128Ty : 1;
+     bool ForceInline : 1;
++    bool FPClassFloat : 1;
++    bool FPClassDouble : 1;
+     bool Trap : 1;
+     bool ConstructorsDestructors : 1;
+   } UsedHeaders;
+@@ -137,6 +140,7 @@ class CWriter : public FunctionPass, public InstVisitor<CWriter> {
+   USED_HEADERS_FLAG(Setjmp)
+   USED_HEADERS_FLAG(Limits)
+   USED_HEADERS_FLAG(Math)
++  USED_HEADERS_FLAG(String)
+ 
+   // printModuleTypes()
+   USED_HEADERS_FLAG(BitCastUnion)
+@@ -161,6 +165,8 @@ class CWriter : public FunctionPass, public InstVisitor<CWriter> {
+   USED_HEADERS_FLAG(ConstantFP80Ty)
+   USED_HEADERS_FLAG(ConstantFP128Ty)
+   USED_HEADERS_FLAG(ForceInline)
++  USED_HEADERS_FLAG(FPClassFloat)
++  USED_HEADERS_FLAG(FPClassDouble)
+   USED_HEADERS_FLAG(Trap)
+   USED_HEADERS_FLAG(ConstructorsDestructors)
+ 
+@@ -310,6 +316,7 @@ private:
+   void visitCallInst(CallInst &I);
+   void visitInlineAsm(CallInst &I);
+   bool visitBuiltinCall(CallInst &I, Intrinsic::ID ID);
++  void validateSTCMemoryIntrinsic(CallInst &I, Intrinsic::ID ID);
+ 
+   void visitAllocaInst(AllocaInst &I);
+   void visitLoadInst(LoadInst &I);

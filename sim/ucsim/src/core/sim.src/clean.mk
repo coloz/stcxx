@@ -2,7 +2,7 @@
 clean: local_clean sub_clean
 
 local_clean:
-	rm -f *core *[%~] *.[oa] test_mem_speed
+	rm -f *core *[%~] *.[oa]
 	rm -f .[a-z]*~
 
 sub_clean:

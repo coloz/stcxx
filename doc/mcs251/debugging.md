@@ -21,67 +21,12 @@ support will require either a CDB-to-GDB bridge or an RSP transport and MCS251
 stack unwinder in `sdcdb`; the existing `sdcdb` MCS-51 unwinder assumes an
 8-bit SP and two-byte return addresses and must not be reused unchanged.
 
-## Automated GDB-stub check
+## Available workflow
 
-`check-gdbstub.py` builds a program with `--debug`, verifies that `_main` has
-the same 24-bit address in the CDB and linker map, starts QEMU halted, reads
-the target XML, installs an RSP breakpoint, continues, verifies the PC when
-QEMU stops, round-trips R0 through the register-write packet, and performs a
-single-instruction step:
-
-```sh
-make -C build/src/mcs251 check-gdbstub \
-    QEMU_MCS251="$HOME/oss/qemu/builds/build-mcs251/qemu-system-mcs251" \
-    MCS251_LIBRARY_DIR=/path/to/device/lib/build/mcs251-small
-```
-
-The check deliberately implements the small RSP subset it needs.  It does
-not depend on the host having a GDB build with an MCS-251 disassembler.
-
-To retain a bounded startup trace during the same check, invoke the script
-directly and add `--trace-log`:
-
-```sh
-python3 src/mcs251/tests/check-gdbstub.py \
-    --sdcc build/bin/sdcc \
-    --qemu "$HOME/oss/qemu/builds/build-mcs251/qemu-system-mcs251" \
-    --source src/mcs251/tests/debug-smoke.c \
-    --device-include device/include \
-    --library-dir build/device/lib/build/mcs251-small \
-    --trace-log /tmp/mcs251-startup.trace
-```
-
-The end-to-end runtime check can retain a separate bounded trace for every
-image with `--trace-dir`:
-
-```sh
-python3 src/mcs251/tests/check-qemu.py \
-    ...normal source, tool, and board arguments... \
-    --runtime-source src/mcs251/tests/runtime-main.c \
-    --optimization-runtime-source \
-        src/mcs251/tests/optimization-runtime.c \
-    --setjmp-spx-source src/mcs251/tests/setjmp-spx-runtime.c \
-    --library-dir build/device/lib/build/mcs251-small \
-    --stack-auto-library-dir build/device/lib/build/mcs251-small-stack-auto \
-    --large-library-dir build/device/lib/build/mcs251-large \
-    --large-stack-auto-library-dir \
-        build/device/lib/build/mcs251-large-stack-auto \
-    --work-dir /tmp/mcs251-images \
-    --trace-dir /tmp/mcs251-traces
-```
-
-The runner terminates QEMU as soon as it sees a complete `PASS` or `FAIL`
-line, so an intentional firmware idle loop does not make these traces grow
-without bound.
-
-The regression-port runner accepts the same kind of single-image evidence:
-
-```sh
-python3 support/regression/ports/mcs251/run-qemu.py \
-    --qemu "$HOME/oss/qemu/builds/build-mcs251/qemu-system-mcs251" \
-    --timeout 2 --trace-log /tmp/tst-abs.trace \
-    build/support/regression/gen/mcs251-large/tst_abs.hex
-```
+The project-specific automated GDB-stub and feature runners are not included
+in this source tree. Use the manual session below with your own firmware,
+map and CDB files. The retained upstream regression framework is separate
+from the toolchain build and package inventory checks.
 
 ## Manual QEMU session
 
@@ -134,10 +79,10 @@ show the saved frame.
 
 `cpu,nochain` produces data very quickly, especially after firmware reaches
 an intentional infinite loop.  Prefer `-S` plus a breakpoint, a short test
-timeout, or the automated check above; stop QEMU as soon as the relevant
+timeout; stop QEMU as soon as the relevant
 state has been captured.
 
-The dedicated `setjmp-spx-{small,large}.hex` images separate the compiler ABI
+Historical `setjmp-spx-{small,large}.hex` images separated the compiler ABI
 from indexed-displacement emulation.  They set SPX to `0x0120` without using
 a negative indexed operand, call the installed `setjmp`/`longjmp` library,
 and require both the restored SPX (`0x0120`) and return value (`0x1234`).  A
@@ -147,9 +92,10 @@ back at `0x0120`.  A C subtest also keeps values live in R0-R7 across the two
 returns.  The same test passes with all four small/large and
 default/stack-auto library combinations.
 
-## Confirmed signed-displacement diagnostic
+## Historical signed-displacement diagnostic
 
-The aggregate-return regression provides a concrete example of this method.
+The earlier aggregate-return regression provides a recorded example of this method;
+its project-specific fixture is no longer distributed here.
 At PC `0xfc2837`, SPX is `0x0039` and the legal instruction is encoded as
 `mov r11,@dr60+0xfffb`, i.e. `mov a,@spx-5`.  The intended address is
 `0x0034`, where the caller pushed the three-byte hidden result pointer.  A

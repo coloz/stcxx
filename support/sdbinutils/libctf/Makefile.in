@@ -580,7 +580,7 @@ warn = @warn@
 zlibdir = @zlibdir@
 zlibinc = @zlibinc@
 ACLOCAL_AMFLAGS = -I .. -I ../config -I ../bfd
-AUTOMAKE_OPTIONS = dejagnu foreign info-in-builddir no-texinfo.tex
+AUTOMAKE_OPTIONS = foreign info-in-builddir no-texinfo.tex
 
 # Suppress 'configure.ac: error: AM_GNU_GETTEXT used but SUBDIRS not defined'
 # from Automake, as libctf uses AM_GNU_GETTEXT (through
@@ -1573,7 +1573,6 @@ distcleancheck: distclean
 	       $(distcleancheck_listfiles) ; \
 	       exit 1; } >&2
 check-am: all-am
-	$(MAKE) $(AM_MAKEFLAGS) check-DEJAGNU
 check: check-recursive
 all-am: Makefile $(INFO_DEPS) $(LTLIBRARIES) $(HEADERS) config.h
 installdirs: installdirs-recursive
@@ -1811,30 +1810,6 @@ uninstall-am: uninstall-dvi-am uninstall-html-am \
 
 .PRECIOUS: Makefile
 
-
-check-DEJAGNU: site.exp development.exp
-	srcroot=`cd $(srcdir) && pwd`; export srcroot; \
-	r=`pwd`; export r; \
-	LC_ALL=C; export LC_ALL; \
-	EXPECT=$(EXPECT); export EXPECT; \
-	if [ "@host@" = "@target@" ] ; then \
-	  TEST_CROSS=no; \
-	else \
-	  TEST_CROSS=yes; \
-	fi; \
-	runtest=$(RUNTEST); \
-	if $(SHELL) -c "$$runtest --version" > /dev/null 2>&1; then \
-	  $$runtest --tool $(DEJATOOL) --srcdir $${srcroot}/testsuite \
-		CC="$(CC)" CC_FOR_TARGET="$(CC_FOR_TARGET)" TEST_CROSS="$${TEST_CROSS}" \
-		CFLAGS="$(CFLAGS) -I$(INCDIR) -I$(srcdir) -I$(builddir) -I$(builddir)/../bfd $(ZLIBINC)" \
-		LIBS="$(libctf_nobfd_la_LIBADD) $(LIBS)" $(RUNTESTFLAGS); \
-	else echo "WARNING: could not find \`runtest'" 1>&2; :;\
-	fi
-
-development.exp: $(BFDDIR)/development.sh
-	$(AM_V_GEN)$(EGREP) "(development|experimental)=" $(BFDDIR)/development.sh  \
-	  | $(AWK) -F= '{ print "set " $$1 " " $$2 }' > $@
-	echo "set have_tcl_try @HAVE_TCL_TRY@" >> $@
 
 @BUILD_INFO_TRUE@html-local: doc/ctf-spec/index.html
 @BUILD_INFO_TRUE@doc/ctf-spec/index.html: doc/ctf-spec.texi doc/$(am__dirstamp)

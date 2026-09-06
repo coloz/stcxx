@@ -2760,10 +2760,13 @@ toBoolean (operand * oper)
       AccUsed |= aopGetUsesAcc (oper->aop, offset++);
     }
 
-  if (opIsGptr (oper))
+  if (opIsGptr (oper) && GPTRSIZE > FARPTRSIZE)
     {
-      /* assumes that banks never map to address 0x0000
-         so it suffices to check dptr part only and ignore b */
+      /* Tagged generic pointers carry an address-space discriminator after
+         the far-address bytes.  That discriminator need not participate in
+         a null test.  MCS251 generic pointers are instead flat 24-bit
+         addresses (GPTRSIZE == FARPTRSIZE), so their high byte is part of
+         the address and must be tested. */
       size = AOP_SIZE (oper) - 2;
     }
   else

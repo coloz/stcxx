@@ -1102,30 +1102,30 @@ src/core/cmd.src/Makefile
 src/core/motorola.src/Makefile
 src/core/utils.src/Makefile
 src/core/sim.src/Makefile
-src/core/sim.src/test/Makefile
+
 src/core/gui.src/Makefile
 
-src/sims/avr.src/Makefile     src/sims/avr.src/test/Makefile
-src/sims/m68hc08.src/Makefile src/sims/m68hc08.src/test/Makefile
-src/sims/m6809.src/Makefile   src/sims/m6809.src/test/Makefile
-src/sims/m6800.src/Makefile   src/sims/m6800.src/test/Makefile
-src/sims/m68hc11.src/Makefile src/sims/m68hc11.src/test/Makefile
-src/sims/m68hc12.src/Makefile src/sims/m68hc12.src/test/Makefile
-src/sims/mos6502.src/Makefile src/sims/mos6502.src/test/Makefile
-src/sims/rxk.src/Makefile     src/sims/rxk.src/test/Makefile
-src/sims/pblaze.src/Makefile  src/sims/pblaze.src/test/Makefile
-src/sims/i8085.src/Makefile   src/sims/i8085.src/test/Makefile
-src/sims/f8.src/Makefile      src/sims/f8.src/test/Makefile
-src/sims/i8048.src/Makefile   src/sims/i8048.src/test/Makefile
-src/sims/p1516.src/Makefile   src/sims/p1516.src/test/Makefile
-src/sims/pdk.src/Makefile     src/sims/pdk.src/test/Makefile
-src/sims/s51.src/Makefile     src/sims/s51.src/test/Makefile
-src/sims/st7.src/Makefile     src/sims/st7.src/test/Makefile
-src/sims/stm8.src/Makefile    src/sims/stm8.src/test/Makefile
-src/sims/tlcs.src/Makefile    src/sims/tlcs.src/test/Makefile
-src/sims/xa.src/Makefile      src/sims/xa.src/test/Makefile
-src/sims/z80.src/Makefile     src/sims/z80.src/test/Makefile
-src/sims/oisc.src/Makefile    src/sims/oisc.src/test/Makefile
+src/sims/avr.src/Makefile
+src/sims/m68hc08.src/Makefile
+src/sims/m6809.src/Makefile
+src/sims/m6800.src/Makefile
+src/sims/m68hc11.src/Makefile
+src/sims/m68hc12.src/Makefile
+src/sims/mos6502.src/Makefile
+src/sims/rxk.src/Makefile
+src/sims/pblaze.src/Makefile
+src/sims/i8085.src/Makefile
+src/sims/f8.src/Makefile
+src/sims/i8048.src/Makefile
+src/sims/p1516.src/Makefile
+src/sims/pdk.src/Makefile
+src/sims/s51.src/Makefile
+src/sims/st7.src/Makefile
+src/sims/stm8.src/Makefile
+src/sims/tlcs.src/Makefile
+src/sims/xa.src/Makefile
+src/sims/z80.src/Makefile
+src/sims/oisc.src/Makefile
 
 src/apps/serio.src/Makefile
 src/apps/ucsim.src/Makefile

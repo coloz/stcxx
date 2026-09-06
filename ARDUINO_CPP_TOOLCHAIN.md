@@ -1,132 +1,106 @@
-# Arduino STC51 experimental C++ toolchain
+# STCXX C/C++ toolchain architecture
 
-This directory is the standalone source project for the experimental
-Arduino-STC51 C++ compiler pipeline.  It is rooted in the upstream
-`gevico/sdcc-c251` Git history and keeps every source stage, patch and lock in
-one place:
+STCXX is the source project for the experimental STC 8051/251 freestanding
+C/C++ toolchain. Installation and usage are described in [README.md](README.md).
+The checkout is named `stcxx`; the underlying executables retain their names.
 
 ```text
-patched Clang 20.1.8 (C++ -> locked STC LLVM IR)
-  -> LLVM-CBE 83f1bea (LLVM IR -> portable C)
-  -> fail-closed Arduino adapter
-  -> patched SDCC b09075b6 (C -> MCS51/MCS251 image)
+C++ -> patched Clang -> LLVM IR -> LLVM-CBE -> audited C adapter -> SDCC
+    -> ASxxxx assembler/linker -> Intel HEX firmware
 ```
 
-The project source lives at `D:\Git\sdcc-c251-arduino` on Windows and at
-`/mnt/d/Git/sdcc-c251-arduino` in WSL.
+Plain C goes directly through SDCC. Arduino supplies board configuration,
+startup code, the runtime and the final chip-specific linker layout.
 
-## Source layout
+## Sources and identity
 
-- `toolchain/llvm-project/clang`: official LLVM/Clang `llvmorg-20.1.8`
-  source.  The STC TargetInfo patch is in
-  `arduino/patches/clang-20.1.8-stcsdcc-ir-only.patch`.
-- `toolchain/llvm-cbe`: `JuliaHubOSS/llvm-cbe` at the locked commit.
-  STC address-space, 24-bit integer and aggregate lowering fixes are retained
-  in `arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch`.
-- the repository root: `gevico/sdcc-c251` at the locked base commit, with
-  `arduino/patches/sdcc-mcs251-arduino-cpp.patch` applied.  This combined
-  patch includes ISR context preservation and the MCS251 16-bit SPX/SSEG
-  linker extension.
-- `arduino/bridge`: the audited LLVM-CBE-to-SDCC source adapter used by the
-  Arduino core integration.
-- `arduino/toolchain-lock.json`: exact source, patch, ABI and reference-binary
-  identities.
+- `toolchain/llvm-project/clang`: Clang 20.1.8 source. Its STC IR target patch
+  is `arduino/patches/clang-20.1.8-stcsdcc-ir-only.patch`.
+- `toolchain/llvm-cbe`: LLVM-CBE at commit `83f1bea66c7415c701925470a2f7596b37153197`.
+  Its STC address-space and C lowering changes are in
+  `arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch`.
+- The repository root contains SDCC based on `gevico/sdcc-c251` commit
+  `b09075b6a93e6afe10645181e3aeff041ea37f87`. The combined production patch is
+  `arduino/patches/sdcc-mcs251-arduino-cpp.patch`.
+- `arduino/bridge` holds the IR audit and LLVM-CBE-to-SDCC C adapter.
+- `arduino/toolchain-lock.json` records source, patch, ABI and reference-tool
+  identities. `arduino/sources` retains the locked Clang/CMake source archives.
 
-The official Clang/CMake release archives are retained in `arduino/sources`.
-They are hash-locked and allow a clean build without trusting an old compiler
-cache.  The expanded LLVM Git worktree exists for source inspection and source
-provenance.
+The source checker verifies production inputs and patch application. Project
+regression fixtures are not part of the source build contract. Source hashes,
+package inventory and manifest verification do not establish runtime or
+hardware qualification.
 
-## Prepare, build and test in WSL
+## Build and package layout
 
-From the project root:
+The current full build scripts run in Linux/WSL and require LLVM 20 development
+files. Use a new absolute build directory:
 
 ```sh
-bash arduino/scripts/prepare-sources-wsl.sh
-bash arduino/scripts/check-sources-wsl.sh
-bash arduino/scripts/build-wsl.sh /var/tmp/sdcc-c251-arduino-build all
-bash arduino/scripts/self-test-wsl.sh /var/tmp/sdcc-c251-arduino-build
+bash arduino/scripts/build-wsl.sh /var/tmp/stcxx-build all
 ```
 
-`check-sources-wsl.sh` validates the patched source state, so it is not the
-first command for a clean checkout. Run `prepare-sources-wsl.sh` first; it
-canonicalizes only the nine patch-target files to LF, verifies the locked
-source commits and patch hashes, and applies both patches with ordinary
-`git apply` checks. The source checker then verifies the normalized SHA-256 of
-all eight changed Clang files and the changed LLVM-CBE file. `build-wsl.sh`
-also invokes prepare and check itself, so the explicit first two commands are
-useful as a quick source-only preflight rather than an additional requirement.
+The stages `clang`, `llvm-cbe`, `sdcc` and `all` are accepted. The script
+prepares and checks source state itself. To inspect source preparation
+separately, run `prepare-sources-wsl.sh` before `check-sources-wsl.sh`.
 
-The build script refuses an existing build directory.  Valid stages are
-`clang`, `llvm-cbe`, `sdcc`, and `all`.  A standalone SDCC-only build is:
+The source preparation step normalizes line endings only in the explicitly
+listed patch-target files, verifies locked commits and patch hashes, and
+applies the Clang/LLVM-CBE patches using ordinary Git checks.
+
+Publish the SDCC build into a new output directory:
 
 ```sh
-bash arduino/scripts/build-wsl.sh /var/tmp/sdcc-c251-arduino-sdcc sdcc
+bash arduino/scripts/publish-sdcc-out-wsl.sh /var/tmp/stcxx-build/sdcc /path/to/new-out
+bash arduino/scripts/check-out-wsl.sh /path/to/new-out
 ```
 
-Its entry point is
-`/var/tmp/sdcc-c251-arduino-sdcc/sdcc/bin/sdcc`; the real ELF is
-`/var/tmp/sdcc-c251-arduino-sdcc/sdcc/src/sdcc`.
+`check-out-wsl.sh` checks tool startup, required executables, runtime-library
+directories and `MANIFEST.sha256`. It does not compile or execute firmware.
+The convenience `bootstrap-sdcc-out-wsl.sh` builds SDCC, publishes it and runs
+these package integrity checks.
 
-For the stable project-local entry used by Arduino, build, publish, and test
-in one command (both targets must not already exist):
+The default package entry points are `out/bin/sdcc` and
+`out/bin/sdldmcs251`. The package includes the real compiler, the preprocessor
+and its `cc1`, assemblers, linkers, headers and both target runtime libraries.
+Keep the complete package. Clang and LLVM-CBE remain in their separate build
+directories and are selected through the Arduino integration's tool paths.
 
-```sh
-bash arduino/scripts/bootstrap-sdcc-out-wsl.sh \
-  /var/tmp/sdcc-c251-arduino-clean-build \
-  /mnt/d/Git/sdcc-c251-arduino/out
-```
+## Target ABI profiles
 
-The fixed entry points are:
+The patched Clang STC profiles emit LLVM IR for the locked adapter pipeline.
+They are not native LLVM machine backends; final target code comes from SDCC.
 
-- `/mnt/d/Git/sdcc-c251-arduino/out/bin/sdcc`
-- `/mnt/d/Git/sdcc-c251-arduino/out/bin/sdldmcs251`
+| Property | MCS-51 | MCS-251 |
+| --- | --- | --- |
+| Triple | `msp430-stc51-none-eabi` | `msp430-stc-none-eabi` |
+| Byte order | Little-endian | Big-endian |
+| `int` | 16 bits | 16 bits |
+| `size_t` | 16 bits | 32 bits |
+| `ptrdiff_t` | 32 bits | 32 bits |
+| Generic data pointer | Tagged 24-bit pointer | Flat 24-bit pointer |
+| Function pointer | 16 bits, program address space 1 | 24 bits |
+| Data-member pointer | 2 bytes | 3 bytes |
+| Member-function pointer | 4 bytes | 6 bytes |
 
-`out` is a generated, relocatable bundle containing the real compiler,
-preprocessor/`cc1`, assemblers, both linkers, headers and all MCS51/MCS251
-runtime-library models.  It does not depend on the temporary build directory.
-Run `bash arduino/scripts/check-out-wsl.sh` to verify its manifest and strict
-stack regression.
+Each profile has a distinct runtime ABI identity symbol in the lock file.
+Objects, libraries and runtime code must match the selected profile. The
+MCS-251 linker mode `sdldmcs251` also supports the project's 16-bit SPX/SSEG
+stack layout; the legacy MCS-51 layout retains its own IRAM constraints.
 
-## MCS251 extended-stack qualification
+## C++ boundary
 
-`sdldmcs251` is a distinct linker mode; legacy MCS51 continues to invoke
-`sdld` and retains its 256-byte IRAM limit.  The regression checks exact
-`SSEG`, `s_SSEG`, `l_SSEG`, `__start__stack`, `l_IRAM` and `.mem` SPX output
-for 0x0800, 0x1000 and 0x4000 EDATA configurations.  It also proves an
-out-of-range SSEG is rejected and that MCS51 does not inherit the extension.
+The Arduino integration selects `gnu++11`, disables exceptions, RTTI,
+thread-safe statics and static destructors, and provides its embedded runtime.
+Function-local static initialization uses a non-threadsafe direct guard.
+TLS and a hosted `libstdc++` are not supplied.
 
-## C++ target profiles and qualification boundary
+The adapter checks target layout, ABI anchors, constructors and supported IR
+before accepting the generated C. Complex aggregate/bitfield operations,
+varargs and weak/COMDAT edge cases remain subject to these checks; accepting
+C++ syntax in Clang alone does not establish a working firmware ABI.
 
-Both Clang STC frontend profiles are implemented and experimentally qualified
-through the Arduino compile/link pipeline. They emit locked LLVM IR for the
-audited LLVM-CBE and adapter path; neither profile is a native LLVM machine
-backend, and Clang assembly/object output remains deliberately fail-closed.
-
-- MCS51 uses `msp430-stc51-none-eabi` with the little-endian layout recorded in
-  `arduino/toolchain-lock.json`: 16-bit `size_t`, 32-bit `ptrdiff_t`, a tagged
-  24-bit generic data pointer, and a 16-bit code/function pointer. Ordinary
-  function pointers, data-member pointers, and member-function pointers occupy
-  2, 2, and 4 bytes respectively. Indirect member calls are emitted in program
-  address space 1 and are audited before C lowering.
-- MCS251 uses `msp430-stc-none-eabi` with the locked big-endian 24-bit pointer
-  layout: 32-bit `size_t`/`ptrdiff_t` and three-byte generic, code and ordinary
-  function pointers. Data-member and member-function pointers occupy 3 and 6
-  bytes respectively; their CodeGen integer components are explicitly i24.
-
-The regression suite checks both triples and layouts, ordinary function
-pointers, data-member and nonvirtual/virtual member-function pointer forms,
-null comparisons, MCS51 program-address-space calls, and the 2/2/4 versus
-3/3/6 AST/IR sizes. LLVM-CBE regressions separately lock STC-only
-`_BitInt(24)` lowering, unchanged generic i24 behavior, aggregate pointer casts,
-and const-correct zero-sized globals. Final SDCC compile/link, capacity and
-runtime qualification belongs to the Arduino Core evidence rather than raw
-LLVM-CBE output.
-
-Function-local statics use Clang's non-threadsafe one-byte direct guard under
-the Core's `-fno-threadsafe-statics` policy. This is not a claim that
-`__cxa_guard_*` provides thread-safe initialization. Exceptions, RTTI, TLS and
-a hosted `libstdc++` are not supplied. Varargs, complex aggregate/bitfield and
-weak/COMDAT edge cases remain fail-closed or unqualified. This project is an
-experimental freestanding Arduino toolchain, not a general desktop C++
-compiler.
+Chip-specific Flash addresses, stack/heap limits and startup behavior belong
+to [arduino-stc51](../arduino-stc51/README.md). The existing C++ board profiles
+are experimental. Firmware validation and UART ISP are supplied separately
+by [stc-cli](../stc-cli/README.md).

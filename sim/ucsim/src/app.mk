@@ -16,14 +16,6 @@ installdirs:
 	test -d $(DESTDIR)$(bindir) || $(INSTALL) -d $(DESTDIR)$(bindir)
 
 
-.PHONY:	test baseline
-test:
-	@$(MAKE) --no-print-directory -C test
-
-baseline:
-	@$(MAKE) --no-print-directory -C test baseline
-
-
 $(LEN): $(OBJECTS) $(UCSIM_LIB_PREREQUES) $(LOCAL_LIB_PREREQU)
 ifeq ($(SILENT),yes)
 	@echo LNK-$(PKG)

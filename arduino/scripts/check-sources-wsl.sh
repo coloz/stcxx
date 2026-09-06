@@ -33,27 +33,16 @@ check_normalized_sha() {
 }
 
 check_sha 46156f7ae915487cd31dd94a99934d05706db591bcf2942253e8248b2bf60b25 "${sdcc_patch}"
-check_sha 684114dd748396fa9967f18b177944a50800cd5621386a8387e2af24c7aa08f5 "${sdcc_combined_patch}"
+check_sha cf69ac0418f940e1ccc950ecff72d81e29a017847172747dc2cf3e31d26fabb3 "${sdcc_combined_patch}"
+check_sha b24f23cb45d29b766ab9a894452ed274dbb301a7315aa04b169d112bc5d1183e "${repo_root}/src/mcs251/Makefile.in"
 check_sha f8fda423712d808dd087d4e789b1e824911cde62d738078bf9325a898d8476c0 "${clang_patch}"
-check_sha 6a3e793f69ffdde98495935103545eebbeebdecb5edc3b853c341639199802ac "${cbe_patch}"
+check_sha 0a332f0000aa9d335eb4c0b67bbd40b3020d9acf586c4279b5e8a0ecd2c3025f "${cbe_patch}"
 check_sha b7a1b7b0af7b9c7596af6bd46e36d11321926eaa66a7a7dc957ab0a1375ee4b0 "${repo_root}/arduino/sources/clang-20.1.8.src.tar.xz"
 check_sha 3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634 "${repo_root}/arduino/sources/cmake-20.1.8.src.tar.xz"
-check_sha 28397cca4f7c1c73e83df05e72ae0fdd2e122a122c2d7f915416f8a2a0275575 "${repo_root}/arduino/bridge/audit_and_adapt.py"
-check_sha 9980df2cd3d8805b33cd6aa1266984658a7e7f0676a24d47fbb6f6a82b0e7bb0 "${repo_root}/arduino/bridge/adapt.py"
-check_sha 1b98790a11db215d0e3fa625d0d202b662873f527db8b6c0b19bb794ff2ee180 "${repo_root}/arduino/tests/check-bridge-adapter.py"
+check_sha d5786ada45174a4da0fd6c01ac0e2b589533e87fd8090347a136e60459b1ad24 "${repo_root}/arduino/bridge/audit_and_adapt.py"
+check_sha 57f696501cb3254ebc31a6f31f17262d1e4d5fa39be710cce8a04011cdae5e52 "${repo_root}/arduino/bridge/adapt.py"
 check_sha d89d1a430676e178979310c856f7e331a6c18bb2f640d4afa9bef2810ba8aa50 "${repo_root}/arduino/scripts/build-wsl.sh"
-check_sha 255545a33ef240326372d0031f3d0f291b603bb078225c932886c6c2ac4644d3 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
-check_sha 886d349f28b3d0ff045927413be253b66090ec5ba83e67ed9152d2dbf3901bae "${repo_root}/arduino/tests/check-clang-target.py"
-check_sha 96591c481d69e29ee1fd0763e6a0306811bd39f5f1ec64b8030d0ce03f02bc9f "${repo_root}/arduino/tests/check-stc-cpp-targets.py"
-check_sha 1399b4266fa46054b1f7bb490e64b63037c506e878eb5825d4ff1cc679eebfb6 "${repo_root}/arduino/tests/probe/mcs51_target_info_probe.cpp"
-check_sha a21c98d3dace9247e4922d65a24d4414eaf697a43ad7021c5eb41d3e4e63c1dd "${repo_root}/arduino/tests/probe/target_info_probe.cpp"
-check_sha c8f3c0d3d2ba62bbd1f15896c0da52bb14e802f0fcc3a615ff69356bf51d3cc8 "${repo_root}/arduino/tests/probe/stock_msp430_probe.cpp"
-check_sha 7d2a46a447d298324f37207457d676e326e23f82c3f902d4ca0748f556fb31ae "${repo_root}/arduino/tests/probe/stock_relative_vtable_probe.cpp"
-check_sha f87cb48a95d6dae43ffba6cfbde9a73298e28feca254f8176b7cc48fadbd2c81 "${repo_root}/arduino/tests/cbe/run-stc-regressions.sh"
-check_sha 8a3b5b8202f3ae5bcfcd2809ff09d7a6044be64b832d48b20bd7e82e30e51603 "${repo_root}/arduino/tests/cbe/i24-stc-mcs251.ll"
-check_sha 1fe27783b4e939a590381b125b13c9785a871b7d11df5ad342554947c5d9c66c "${repo_root}/arduino/tests/cbe/i24-generic.ll"
-check_sha 2666306180926ad124a70952146b8e8a01844daa9490277ec92755d2bb691946 "${repo_root}/arduino/tests/cbe/aggregate-pointer-cast.ll"
-check_sha a58a33ce9438c59b50fcdae39aa4ca9164dd566d8c4e112376d2965322344f57 "${repo_root}/arduino/tests/cbe/zero-sized-global-const.ll"
+check_sha fc6b85c57169f5c179f2e6f564792ec496655ee03c806db1df84d8b09e240c95 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
 
 check_normalized_sha 23ade7d95b1a7497f20b1bcfa8823c33ecb72087c1c0aa05dc52020a96aad289 "${repo_root}/toolchain/llvm-project/clang/include/clang/Basic/TargetInfo.h"
 check_normalized_sha 83e17d363bfebaa63486d107b28c6b6cd531dd4fb307a75db6ae9fac9ae09ee3 "${repo_root}/toolchain/llvm-project/clang/lib/AST/ASTContext.cpp"
@@ -69,7 +58,8 @@ check_normalized_sha b556fcf113c24ce29c7f303f0a19fcfebe93b421bf1e87b21ba8bae0cd6
 check_normalized_sha 5da5e393f30104f121ac94bb131a70411b65ff99b7519bacb0ee2126d5e20cd1 "${repo_root}/toolchain/llvm-project/clang/lib/CodeGen/CodeGenTypeCache.h"
 check_normalized_sha 299449910e285455679d28db550a1f058904027b867e814d92869b199da9f3d5 "${repo_root}/toolchain/llvm-project/clang/lib/CodeGen/ItaniumCXXABI.cpp"
 check_normalized_sha 2e53d79ee3d3c23ee3f792c5d21fe0dcdf7e41f1214141a7cca0e927241f4f56 "${repo_root}/toolchain/llvm-project/clang/lib/Driver/ToolChains/Clang.cpp"
-check_normalized_sha 4646930a0edf0d33845c9770af7c4fa8946d48822ec000b5bee3fff3e746045c "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.cpp"
+check_normalized_sha 6772e3298c06f78a12bbf0bd6ef41bb087a5af6fd6f9ce35251614a559bb6d4e "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.cpp"
+check_normalized_sha c4bb3e5141ade91bb86067d9df3e2a73810e3a6836aa43f0db8be15f41b4f7b0 "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.h"
 
 git -C "${repo_root}" cat-file -e "${base_commit}^{commit}"
 git -C "${repo_root}" apply --reverse --check "${sdcc_combined_patch}"
@@ -81,6 +71,7 @@ git -C "${repo_root}" diff --check -- \
   src/mcs251/gen.c \
   src/mcs251/gen_lower.c.inc \
   src/SDCCpeeph.c \
+  src/SDCClrange.c \
   sdas/linksrc/lkmain.c \
   sdas/linksrc/lkmem.c
 patched_blob=$(git -C "${repo_root}" hash-object src/mcs251/gen.c)
@@ -89,13 +80,18 @@ test "${patched_blob}" = 61aeb1ca96b0a7b81b6c5aa2bd77fd413745cae0 || {
   exit 3
 }
 patched_lower_blob=$(git -C "${repo_root}" hash-object src/mcs251/gen_lower.c.inc)
-test "${patched_lower_blob}" = f7d78a4691338b931baef9b81e5aaf0033cbf5a3 || {
+test "${patched_lower_blob}" = 026c645c3a63d83fa02bf6131d110e4659bc2b86 || {
   echo "patched src/mcs251/gen_lower.c.inc blob mismatch: ${patched_lower_blob}" >&2
   exit 3
 }
 patched_peeph_blob=$(git -C "${repo_root}" hash-object src/SDCCpeeph.c)
 test "${patched_peeph_blob}" = 74c37082698baca89bd8b2257b23e196387c124e || {
   echo "patched src/SDCCpeeph.c blob mismatch: ${patched_peeph_blob}" >&2
+  exit 3
+}
+patched_lrange_blob=$(git -C "${repo_root}" hash-object src/SDCClrange.c)
+test "${patched_lrange_blob}" = b14e27bc67892534c060ec2ea0dea79025ed0cab || {
+  echo "patched src/SDCClrange.c blob mismatch: ${patched_lrange_blob}" >&2
   exit 3
 }
 lkmain_blob=$(git -C "${repo_root}" hash-object sdas/linksrc/lkmain.c)
@@ -125,6 +121,7 @@ echo "SDCC_BASE_COMMIT=${base_commit}"
 echo "SDCC_PATCHED_GEN_BLOB=${patched_blob}"
 echo "SDCC_PATCHED_GEN_LOWER_BLOB=${patched_lower_blob}"
 echo "SDCC_PATCHED_PEEPH_BLOB=${patched_peeph_blob}"
+echo "SDCC_PATCHED_LRANGE_BLOB=${patched_lrange_blob}"
 echo "SDCC_PATCHED_LKMAIN_BLOB=${lkmain_blob}"
 echo "SDCC_PATCHED_LKMEM_BLOB=${lkmem_blob}"
 echo "LLVM_PROJECT_COMMIT=${llvm_commit}"

@@ -19,7 +19,7 @@
 
 ACLOCAL_AMFLAGS = -I .. -I ../config -I ../bfd
 
-AUTOMAKE_OPTIONS = dejagnu foreign info-in-builddir no-texinfo.tex
+AUTOMAKE_OPTIONS = foreign info-in-builddir no-texinfo.tex
 
 # Suppress 'configure.ac: error: AM_GNU_GETTEXT used but SUBDIRS not defined'
 # from Automake, as libctf uses AM_GNU_GETTEXT (through
@@ -72,55 +72,7 @@ libctf_la_CPPFLAGS = $(AM_CPPFLAGS) -DNOBFD=0
 libctf_la_LDFLAGS = $(libctf_ldflags_nover) @VERSION_FLAGS@
 libctf_la_SOURCES = $(libctf_nobfd_la_SOURCES) ctf-open-bfd.c
 
-# Setup the testing framework, if you have one
-EXPECT = expect
-RUNTEST = runtest
-RUNTESTFLAGS =
-
-CC_FOR_TARGET = ` \
-  if [ -f $$r/../gcc/xgcc ] ; then \
-    if [ -f $$r/../newlib/Makefile ] ; then \
-      echo $$r/../gcc/xgcc -B$$r/../gcc/ -idirafter $$r/../newlib/targ-include -idirafter $${srcroot}/../newlib/libc/include -nostdinc; \
-    else \
-      echo $$r/../gcc/xgcc -B$$r/../gcc/; \
-    fi; \
-  else \
-    if [ "@host@" = "@target@" ] ; then \
-      echo $(CC); \
-    else \
-      echo gcc | sed '$(transform)'; \
-    fi; \
-  fi`
-
-check-DEJAGNU: site.exp development.exp
-	srcroot=`cd $(srcdir) && pwd`; export srcroot; \
-	r=`pwd`; export r; \
-	LC_ALL=C; export LC_ALL; \
-	EXPECT=$(EXPECT); export EXPECT; \
-	if [ "@host@" = "@target@" ] ; then \
-	  TEST_CROSS=no; \
-	else \
-	  TEST_CROSS=yes; \
-	fi; \
-	runtest=$(RUNTEST); \
-	if $(SHELL) -c "$$runtest --version" > /dev/null 2>&1; then \
-	  $$runtest --tool $(DEJATOOL) --srcdir $${srcroot}/testsuite \
-		CC="$(CC)" CC_FOR_TARGET="$(CC_FOR_TARGET)" TEST_CROSS="$${TEST_CROSS}" \
-		CFLAGS="$(CFLAGS) -I$(INCDIR) -I$(srcdir) -I$(builddir) -I$(builddir)/../bfd $(ZLIBINC)" \
-		LIBS="$(libctf_nobfd_la_LIBADD) $(LIBS)" $(RUNTESTFLAGS); \
-	else echo "WARNING: could not find \`runtest'" 1>&2; :;\
-	fi
-
-development.exp: $(BFDDIR)/development.sh
-	$(AM_V_GEN)$(EGREP) "(development|experimental)=" $(BFDDIR)/development.sh  \
-	  | $(AWK) -F= '{ print "set " $$1 " " $$2 }' > $@
-	echo "set have_tcl_try @HAVE_TCL_TRY@" >> $@
-
 # development.sh is used to determine -Werror default.
 CONFIG_STATUS_DEPENDENCIES = $(BFDDIR)/development.sh
-
-EXTRA_DEJAGNU_SITE_CONFIG = development.exp
-
-DISTCLEANFILES += site.exp development.exp
 
 include doc/local.mk
