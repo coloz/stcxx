@@ -389,6 +389,8 @@ struct	area
 #define R_C24           (R_WORD|R_BYT1|R_MSB)   /* 24 bit address (DS80C390)       */
 #define R_MCS251_CONTROL  0x0800                  /* MCS-251 paged control-transfer semantics */
 #define R_J16           R_MCS251_CONTROL          /* 16 bit jump/call in same 64K region */
+#define R_MCS251_24BIT   R_USGN                   /* Full 24-bit addend for R_J11/R_J16 */
+#define R_MCS251_DISP    R_BIT                    /* Word: checked native indexed displacement */
 #define R_J19_MASK      (R_BYTE|R_BYTX|R_MSB)
 
 #define IS_R_J19(x)     (((x) & R_J19_MASK) == R_J19)

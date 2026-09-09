@@ -13,6 +13,7 @@ CPP             = @CPP@
 INSTALL         = @INSTALL@
 STRIP           = @STRIP@
 MAKEDEP         = @MAKEDEP@
+PYTHON          = @PYTHON@
 
 top_builddir    = @top_builddir@
 top_srcdir      = @top_srcdir@
@@ -57,7 +58,7 @@ ASSOURCES = $(SRC) $(ASXXLIBSRC:%.c=$(ASXXLIB)/%.c) $(UTILSRC:%.c=$(UTILLIB)/%.c
 ASOBJECTS = $(OBJS) $(ASXXLIBOBJS) $(UTILLIBOBJS)
 
 ASX = $(top_builddir)/bin/sdas251$(EXEEXT)
-ASLINK = $(top_builddir)/bin/sdld$(EXEEXT)
+ASLINK = $(top_builddir)/bin/sdldmcs251$(EXEEXT)
 DEST = sdas251
 DESTPATH = $(DESTDIR)$(bindir)/
 
@@ -80,6 +81,21 @@ install: all installdirs
 # --------------------------------
 uninstall:
 	rm -f $(DESTPATH)`echo $(DEST)|sed '$(transform)'`$(EXEEXT)
+
+
+# Performing self-test
+# --------------------
+check: all $(ASLINK)
+	sh $(srcdir)/tests/check-encoding.sh $(ASX)
+	$(PYTHON) $(srcdir)/tests/check-instruction-forms.py \
+		$(ASX) $(srcdir)/tests/instruction-forms.tsv
+	sh $(srcdir)/tests/check-coverage.sh
+	sh $(srcdir)/tests/check-link.sh $(ASX) $(ASLINK)
+	sh $(srcdir)/tests/check-errors.sh $(ASX) $(ASLINK)
+	$(PYTHON) $(srcdir)/tests/check-audit.py $(ASX) $(ASLINK)
+
+$(ASLINK):
+	$(MAKE) -C $(top_builddir)/sdas/linksrc sdcc-ldmcs251
 
 
 # Performing installation test

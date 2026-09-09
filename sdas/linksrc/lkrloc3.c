@@ -566,7 +566,12 @@ relr3(void)
 				 * Calculate absolute destination
 				 * relv must be on same 2K page as pc
 				 */
-                        relv = adb_2b(reli, rtp);
+                        if ((mode & (R_MCS251_CONTROL | R_MCS251_24BIT)) ==
+                            (R_MCS251_CONTROL | R_MCS251_24BIT)) {
+                                relv = adb_3b(reli, rtp);
+                        } else {
+                                relv = adb_2b(reli, rtp);
+                        }
 
                         if (mode & R_MCS251_CONTROL) {
                                 if ((relv & a_mask & ~((a_uint) 0x000007FF)) !=
@@ -585,9 +590,16 @@ relr3(void)
 				 * ignoring top 5 bits of address.
 				 * Then hide the op-code.
 				 */
-                        rtval[rtp] = ((rtval[rtp] & 0x07)<<5) | rtval[rtp+2];
-                        rtflg[rtp + 2] = 0;
-				rtofst += 1;
+                        if ((mode & (R_MCS251_CONTROL | R_MCS251_24BIT)) ==
+                            (R_MCS251_CONTROL | R_MCS251_24BIT)) {
+                                rtval[rtp + 1] = ((rtval[rtp + 1] & 0x07) << 5) | rtval[rtp + 3];
+                                rtflg[rtp] = rtflg[rtp + 3] = 0;
+                                rtofst += 2;
+                        } else {
+                                rtval[rtp] = ((rtval[rtp] & 0x07)<<5) | rtval[rtp+2];
+                                rtflg[rtp + 2] = 0;
+				        rtofst += 1;
+                        }
                 }
                 else if (IS_R_J19(mode)) {
 				/*
@@ -639,12 +651,31 @@ relr3(void)
                          * replace only PC[15:0].  The target therefore has to
                          * share the 64 KiB region of the following instruction.
                          */
-                        relv = adb_2b(reli, rtp);
+                        if (mode & R_MCS251_24BIT) {
+                                relv = adb_3b(reli, rtp);
+                                rtflg[rtp] = 0;
+                        } else {
+                                relv = adb_2b(reli, rtp);
+                        }
                         if ((relv & (a_uint) 0x00FF0000) !=
                             ((pc + rtp - rtofst + 2) &
                              (a_uint) 0x00FF0000)) {
                                 error = 15;
                         }
+			if (mode & R_MCS251_24BIT)
+				rtofst += 1;
+		}
+                else if (TARGET_IS_MCS251 && (mode & R_MCS251_DISP))
+                {
+                        /* Native indexed instructions encode a 16-bit
+                           displacement, although their pointer and addend
+                           are 24 bits.  Preserve signed addends until the
+                           symbol is resolved and reject silent truncation. */
+                        relv = adb_3b(reli, rtp) & a_mask;
+                        if (relv > 0xFFFF && relv < (a_mask - 0x7FFF))
+                                error = 16;
+                        rtflg[rtp] = 0;
+                        rtofst += 1;
 			}
                 else
                 {
@@ -679,13 +710,14 @@ relr3(void)
                 /*
                  * Page Relocation Error Checking
                  */
-                if ((TARGET_IS_GB || TARGET_IS_Z80) &&
+                if ((TARGET_IS_GB || TARGET_IS_Z80 || TARGET_IS_MCS251) &&
                     mode & R3_PAG0 && (relv & ~0xFF || paga || pags))
                         error = 4;
                 if (mode & R3_PAG  && (relv & ~0xFF))
                         error = 5;
 /* sdld specific */
-                if ((mode & R_BIT) && (relv & ~0x87FF))
+                if ((mode & R_BIT) && (relv & ~0x87FF) &&
+                    !(TARGET_IS_MCS251 && !(mode & R3_BYTE)))
                         error = 10;
 /* end sdld specific */
 
@@ -733,7 +765,8 @@ char *errmsg3[] = {
 /* 12 */        "mismatched pdk targets; expected pdk15",
 /* 13 */        "mismatched pdk targets; expected pdk14",
 /* 14 */        "mismatched pdk targets; expected pdk13",
-/* 15 */        "64K Region relocation error"
+/* 15 */        "64K Region relocation error",
+/* 16 */        "16-bit displacement relocation error"
 /* end sdld specific */
 };
 

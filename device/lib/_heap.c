@@ -37,5 +37,10 @@
 #endif
 
 __xdata char __sdcc_heap[HEAP_SIZE];
+#if defined(__SDCC_mcs251)
+/* MCS251 size_t is 32-bit so a custom flat heap may cross a 64 KiB
+   boundary without truncating its extent. */
+const unsigned long __sdcc_heap_size32 = HEAP_SIZE;
+#else
 const unsigned int __sdcc_heap_size = HEAP_SIZE;
-
+#endif

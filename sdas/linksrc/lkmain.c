@@ -23,6 +23,45 @@
  */
 
 #include "aslink.h"
+#include <errno.h>
+
+/* Unlike the historical single-letter switches this option must survive
+   command-line preprocessing intact.  The same parser handles .lk files. */
+static void
+codewindowsav(const char *argument)
+{
+        const char *value = argument + strlen("--code-window=");
+        char *next;
+        unsigned long start, end;
+
+        if (code_window_enabled || strncmp(argument, "--code-window=", 14))
+                goto invalid;
+        if (*value < '0' || *value > '9')
+                goto invalid;
+        errno = 0;
+        start = strtoul(value, &next, 0);
+        if (errno || next == value || *next != ':')
+                goto invalid;
+        value = next + 1;
+        if (*value < '0' || *value > '9')
+                goto invalid;
+        errno = 0;
+        end = strtoul(value, &next, 0);
+        if (errno || next == value)
+                goto invalid;
+        while (*next == ' ' || *next == '\t' || *next == '\r' || *next == '\n')
+                ++next;
+        if ((*next && *next != ';') || start >= end || end > 0x1000000UL)
+                goto invalid;
+        code_window_enabled = 1;
+        code_window_start = (a_uint) start;
+        code_window_end = (a_uint) end;
+        return;
+invalid:
+        fprintf(stderr, "?ASlink-Error-expected one --code-window=START:END "
+                        "with 0 <= START < END <= 0x1000000 (END exclusive)\n");
+        lkexit(ER_FATAL);
+}
 
 /*)Module	lkmain.c
  *
@@ -219,6 +258,10 @@ main(int argc, char *argv[])
 
 	for(i=1; i<argc; i++) {
 		ip = ib;
+		if (!strncmp(argv[i], "--code-window", 13)) {
+                        codewindowsav(argv[i]);
+                        continue;
+                }
 		if(argv[i][0] == '-') {
 			j = i;
 			k = 1;
@@ -351,6 +394,11 @@ main(int argc, char *argv[])
 			 * Set bank base addresses.
 			 */
 			setbank();
+
+                        /* All objects and selected libraries are now known.
+                           Reserve fixed islands before linking any CODE area. */
+                        if (code_window_enabled)
+                                lnkcodewindow();
 			/*
 			 * Link all area addresses.
 			 */
@@ -884,6 +932,8 @@ map(void)
 	fprintf(mfp, "\n\f");
 	chkbank(mfp);
 	symdef(mfp);
+        if (code_window_enabled)
+                codewindowmap(mfp);
 }
 
 /*)Function	int	parse(void)
@@ -947,6 +997,10 @@ parse()
                         return(0);
                 /* end sdld specific */
 		if ( c == '-') {
+                        if (!strncmp(ip, "-code-window", 12)) {
+                                codewindowsav(ip - 1);
+                                return(0);
+                        }
 			while (ctype[c=get()] & LETTER) {
 				switch(c) {
 
@@ -1771,6 +1825,7 @@ char *usetxt_8051[] = {
         "  -I   [iram-size] Check for internal RAM overflow",
         "  -X   [xram-size] Check for external RAM overflow",
         "  -C   [code-size] Check for code overflow",
+        "  --code-window=START:END  MCS251 Flash bounds and fixed-area-aware placement (-r)",
         "  -M   Generate memory usage summary file[.mem]",
         "  -S   [stack-size] Allocate space for stack",
 	"End:",

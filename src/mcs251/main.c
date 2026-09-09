@@ -51,6 +51,8 @@ static OPTION _mcs251_options[] =
     { 0, OPTION_LARGE_MODEL, NULL, "external data space is used"},
     { 0, OPTION_HUGE_MODEL, NULL, "functions are banked, data in external space"},
     { 0, OPTION_STACK_SIZE,  &options.stack_size, "Tells the linker to allocate this space for stack", CLAT_INTEGER },
+    { 0, "--function-sections", &options.function_sections, "Put each default CODE function in its own linker area" },
+    { 0, "--data-sections", &options.data_sections, "Put each default CODE constant in its own linker area" },
     { 0, "--acall-ajmp",     &options.acall_ajmp, "Use acall/ajmp instead of lcall/ljmp" },
     { 0, "--no-ret-without-call", &options.no_ret_without_call, "Do not use ret independent of acall/lcall" },
     { 0, NULL }

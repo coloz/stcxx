@@ -46,13 +46,24 @@ struct header
 };
 
 header_t *HEAPSPACE __sdcc_heap_free; // First free block, 0 if no free blocks.
+#if defined(__SDCC_mcs51) || defined(__SDCC_mcs251)
+/* A null free-list head also represents a legitimately exhausted heap.  Keep
+   first-use initialization as separate state so a later allocation cannot
+   resurrect the heap and alias a live allocation. */
+unsigned char __sdcc_heap_initialized;
+#endif
 
 extern header_t __sdcc_heap;
 #define HEAP_START &__sdcc_heap
 
 #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400) || defined(__SDCC_hc08) || defined(__SDCC_s08) || defined(__SDCC_mos6502) || defined(__SDCC_mos65c02)
 
+#if defined(__SDCC_mcs251)
+extern const size_t __sdcc_heap_size32;
+#define __sdcc_heap_size __sdcc_heap_size32
+#else
 extern const unsigned int __sdcc_heap_size;
+#endif
 #define HEAP_END (struct header HEAPSPACE *)((char HEAPSPACE *)&__sdcc_heap + (__sdcc_heap_size - 1)) // -1 To be sure that HEAP_END is bigger than HEAP_START.
 
 #else
@@ -67,6 +78,9 @@ void __sdcc_heap_init(void)
 	__sdcc_heap_free = HEAP_START;
 	__sdcc_heap_free->next = HEAP_END;
 	__sdcc_heap_free->next_free = 0;
+#if defined(__SDCC_mcs51) || defined(__SDCC_mcs251)
+	__sdcc_heap_initialized = 1;
+#endif
 }
 
 #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400)
@@ -78,7 +92,10 @@ void *malloc(size_t size)
 	header_t *h;
 	header_t *HEAPSPACE *f;
 
-#if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400) || defined(__SDCC_hc08) || defined(__SDCC_s08) || defined(__SDCC_mos6502) || defined(__SDCC_mos65c02)
+#if defined(__SDCC_mcs51) || defined(__SDCC_mcs251)
+	if(!__sdcc_heap_initialized)
+		__sdcc_heap_init();
+#elif defined(__SDCC_ds390) || defined(__SDCC_ds400) || defined(__SDCC_hc08) || defined(__SDCC_s08) || defined(__SDCC_mos6502) || defined(__SDCC_mos65c02)
 	if(!__sdcc_heap_free)
 		__sdcc_heap_init();
 #endif

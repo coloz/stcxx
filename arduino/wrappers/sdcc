@@ -4,4 +4,5 @@ set -eu
 bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tool_root=$(CDPATH= cd -- "${bin_dir}/.." && pwd)
 export PATH="${bin_dir}:${tool_root}/libexec:${PATH}"
+export SDCC_HOME="${tool_root}/share/sdcc"
 exec "${tool_root}/libexec/sdcc" "$@"

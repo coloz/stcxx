@@ -162,5 +162,6 @@ char *setPrefixSuffix(const char *);
 char *formatInlineAsm (char *);
 
 void process_identifier (char *dest, const char *src, size_t n);
+/* Caller owns the returned ASxxxx-safe, translation-unit-qualified area name. */
+char *symbolSectionName (const char *prefix, const char *symbol);
 #endif
-

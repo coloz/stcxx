@@ -4482,7 +4482,14 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
 
       if (IS_PTR (LTYPE (tree)) /* && !IS_LITERAL (TETYPE (tree)) caused bug #2850 */)
         {
+          /* The subscript lvalue denotes storage reached through this
+             pointer.  Retain that pointer's output class so a later
+             address-of (for example &p[i]) reconstructs the same generic,
+             code, xdata, or named-address-space pointer instead of falling
+             back to the default near pointer. */
+          setOClass (LTYPE (tree), TETYPE (tree));
           SPEC_SCLS (TETYPE (tree)) = sclsFromPtr (LTYPE (tree));
+          SPEC_ADDRSPACE (TETYPE (tree)) = DCL_PTR_ADDRSPACE (LTYPE (tree));
         }
 
       if (!tree->initMode && IS_REGISTER (TETYPE (tree)))

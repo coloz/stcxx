@@ -343,11 +343,16 @@ scan4op (lineNode **pl, const char *pReg, const char *untilOp,
         }
 
       /* found pReg? */
-      p = strchr ((*pl)->line, '\t');
+      p = (*pl)->line;
+      while (isspace ((unsigned char)*p))
+        p++;
+      p = strpbrk (p, " \t");
       if (p)
         {
-          /* skip '\t' */
-          p++;
+          /* Inline assembler can separate the opcode and operands with
+             spaces, while compiler-generated assembly normally uses a tab. */
+          while (isspace ((unsigned char)*p))
+            p++;
 
           /* when looking for push or pop and we find a direct access of sp: abort */
           if (findPushPop && strstr (p, "sp"))

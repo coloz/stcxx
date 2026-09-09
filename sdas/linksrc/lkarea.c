@@ -147,8 +147,17 @@ newarea(void)
                 ap->a_flag = eval();
 	} else {
 		i = eval();
-                if ((!is_sdld() || TARGET_IS_Z80 || TARGET_IS_Z180 || TARGET_IS_GB) &&
-                        i && (ap->a_flag != i)) {
+                /* Areas51's first, synthetic header establishes SSEG as an
+                   overlay stack.  Compiler glue deliberately selects bare
+                   .area SSEG (flags 0) in the TU containing main, inheriting
+                   those linker defaults.  Only this exact convention may
+                   omit flags; CODE/DATA and other conflicts remain errors. */
+                if (TARGET_IS_MCS251 && !i && ap->a_flag == A3_OVR &&
+                    !strcmp(id, "SSEG") && ap->a_axp->a_bhp == headp)
+                        i = ap->a_flag;
+                if ((TARGET_IS_MCS251 && ap->a_flag != i) ||
+                    ((!is_sdld() || TARGET_IS_Z80 || TARGET_IS_Z180 || TARGET_IS_GB) &&
+                     i && (ap->a_flag != i))) {
                         fprintf(stderr, "?ASlink-Error-Conflicting flags in area %8s\n", id);
 			lkerr++;
 		}
@@ -337,6 +346,311 @@ unsigned long codemap6808[2048];
 /* sdld specific */
 void lnksect(struct area *tap);
 /* end sdld specific */
+
+/* MCS251 uses a flat 24-bit address space, but a device's reset area may
+   lie inside its Flash window.  Allocate whole named areas around all fixed
+   islands before the legacy RAM/relocation pass.  Keeping areas contiguous
+   preserves s_/l_ symbols, XINIT copying, and ordinary map semantics. */
+struct code_window_range {
+        a_uint start, end;
+        struct area *area;
+        int absolute;
+};
+
+struct code_window_area {
+        struct area *area;
+        a_uint size, address, alignment;
+        unsigned int order;
+        int fixed, startup;
+};
+
+static struct code_window_range *code_window_ranges;
+static unsigned int code_window_range_count, code_window_range_capacity;
+
+static int
+code_window_startup_index(const char *name)
+{
+        static const char *names[] = {
+                "GSINIT0", "GSINIT1", "GSINIT2", "GSINIT3", "GSINIT4",
+                "GSINIT5", "GSINIT", "GSFINAL"
+        };
+        unsigned int i;
+        for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i)
+                if (!strcmp(name, names[i]))
+                        return (int)i;
+        return -1;
+}
+
+static void
+code_window_error(const char *reason, const char *name)
+{
+        fprintf(stderr, "?ASlink-Error-code window %s: %s\n", reason, name);
+        lkexit(ER_FATAL);
+}
+
+static void
+code_window_reserve(a_uint start, a_uint size, struct area *area, int absolute)
+{
+        unsigned int i;
+        struct code_window_range *range;
+        if (!size)
+                return;
+        if (start < code_window_start || start >= code_window_end ||
+            size > code_window_end - start)
+                code_window_error("allocation outside Flash bounds", area->a_id);
+        for (i = 0; i < code_window_range_count; ++i) {
+                range = &code_window_ranges[i];
+                if (start < range->end && range->start < start + size) {
+                        fprintf(stderr, "?ASlink-Error-code window overlap: %s "
+                                "[0x%lX,0x%lX) and %s [0x%lX,0x%lX)\n",
+                                area->a_id, (unsigned long)start,
+                                (unsigned long)(start + size), range->area->a_id,
+                                (unsigned long)range->start, (unsigned long)range->end);
+                        lkexit(ER_FATAL);
+                }
+                if (range->start > start)
+                        break;
+        }
+        if (code_window_range_count == code_window_range_capacity)
+                code_window_error("internal range capacity exhausted", area->a_id);
+        memmove(&code_window_ranges[i + 1], &code_window_ranges[i],
+                (code_window_range_count - i) * sizeof(*code_window_ranges));
+        range = &code_window_ranges[i];
+        range->start = start;
+        range->end = start + size;
+        range->area = area;
+        range->absolute = absolute;
+        ++code_window_range_count;
+}
+
+static int
+code_window_find(a_uint size, a_uint alignment, a_uint *address)
+{
+        a_uint start = code_window_start, end;
+        unsigned int i;
+        for (i = 0; i <= code_window_range_count; ++i) {
+                start = (start + alignment - 1) & ~(alignment - 1);
+                end = i < code_window_range_count ?
+                        code_window_ranges[i].start : code_window_end;
+                if (start <= end && size <= end - start) {
+                        *address = start;
+                        return 1;
+                }
+                if (i < code_window_range_count)
+                        start = code_window_ranges[i].end;
+        }
+        return 0;
+}
+
+static int
+code_window_largest_first(const void *left, const void *right)
+{
+        const struct code_window_area *a = *(const struct code_window_area * const *)left;
+        const struct code_window_area *b = *(const struct code_window_area * const *)right;
+        if (a->size != b->size)
+                return a->size > b->size ? -1 : 1;
+        return a->order < b->order ? -1 : a->order > b->order;
+}
+
+void
+lnkcodewindow(void)
+{
+        struct area *area;
+        struct areax *section;
+        struct code_window_area *areas, **movable, *item, *startup[8] = {0};
+        struct code_window_area startup_group = {0};
+        struct code_window_range *fixed_ranges;
+        a_uint size, startup_size = 0, startup_address = 0, offset, candidate;
+        unsigned int count = 0, i, j, movable_count = 0, fixed_count;
+        int startup_fixed = 0, attempt, placed = 0;
+
+        if (!TARGET_IS_MCS251 || !rflag)
+                code_window_error("requires the MCS251 linker and -r", "--code-window");
+
+        code_window_range_capacity = 1;
+        for (area = areap; area; area = area->a_ap) {
+                if (!(area->a_flag & A_CODE))
+                        continue;
+                ++count;
+                ++code_window_range_capacity;
+                if (area->a_flag & A3_ABS)
+                        for (section = area->a_axp; section; section = section->a_axp)
+                                ++code_window_range_capacity;
+        }
+        areas = (struct code_window_area *)new((count + 1) * sizeof(*areas));
+        movable = (struct code_window_area **)new((count + 1) * sizeof(*movable));
+        code_window_ranges = (struct code_window_range *)new(
+                code_window_range_capacity * sizeof(*code_window_ranges));
+        code_window_range_count = 0;
+        i = 0;
+        for (area = areap; area; area = area->a_ap) {
+                if (!(area->a_flag & A_CODE))
+                        continue;
+                item = &areas[i];
+                item->area = area;
+                item->order = ++i;
+                item->address = area->a_addr;
+                item->fixed = area->a_bset;
+                item->startup = code_window_startup_index(area->a_id);
+                item->alignment = !strncmp(area->a_id, "CSEG_F_", 7) ? 2 : 1;
+                if (area->a_flag & A3_PAG)
+                        item->alignment = 256;
+                size = 0;
+                for (section = area->a_axp; section; section = section->a_axp) {
+                        if (area->a_flag & A3_ABS)
+                                code_window_reserve(section->a_addr, section->a_size, area, 1);
+                        if ((area->a_flag & A3_OVR) && !(area->a_flag & A3_ABS)) {
+                                if (section->a_size > size)
+                                        size = section->a_size;
+                        } else {
+                                /* A function section can be contributed more
+                                   than once (for example one source compiled
+                                   with different defines).  Align each live
+                                   contribution, not just the combined area. */
+                                if (!(area->a_flag & A3_ABS) && section->a_size &&
+                                    !strncmp(area->a_id, "CSEG_F_", 7) && (size & 1)) {
+                                        if (size == code_window_end - code_window_start)
+                                                code_window_error("area exceeds complete Flash capacity", area->a_id);
+                                        ++size;
+                                }
+                                if (section->a_size > code_window_end - code_window_start ||
+                                    size > code_window_end - code_window_start - section->a_size)
+                                        code_window_error("area exceeds complete Flash capacity", area->a_id);
+                                size += section->a_size;
+                        }
+                }
+                item->size = size;
+                if ((area->a_flag & A3_PAG) && size > 256)
+                        code_window_error("paged CODE area exceeds 256 bytes", area->a_id);
+                if (area->a_flag & A3_ABS) {
+                        if (item->startup >= 0)
+                                code_window_error("startup must be relocatable", area->a_id);
+                        continue;
+                }
+                if (item->startup >= 0) {
+                        if (area->a_flag & (A3_OVR | A3_PAG))
+                                code_window_error("startup must be concatenated and unpaged", area->a_id);
+                        startup[item->startup] = item;
+                } else if (item->fixed) {
+                        if (size && item->address % item->alignment)
+                                code_window_error("fixed area violates required alignment", area->a_id);
+                        code_window_reserve(item->address, size, area, 0);
+                } else if (size) {
+                        movable[movable_count++] = item;
+                } else {
+                        item->address = code_window_start;
+                }
+        }
+
+        /* All GSINIT stages and GSFINAL fall through, including fragments
+           contributed by other objects.  Derive one group base from any
+           explicit stage base and reject inconsistent fixed anchors. */
+        offset = 0;
+        for (j = 0; j < 8; ++j) {
+                if (!(item = startup[j]))
+                        continue;
+                if (item->fixed) {
+                        if (item->address < offset)
+                                code_window_error("invalid fixed startup address", item->area->a_id);
+                        candidate = item->address - offset;
+                        if (startup_fixed && candidate != startup_address)
+                                code_window_error("inconsistent fixed startup stages", item->area->a_id);
+                        startup_address = candidate;
+                        startup_fixed = 1;
+                }
+                if (item->size > code_window_end - code_window_start - offset)
+                        code_window_error("startup exceeds complete Flash capacity", item->area->a_id);
+                offset += item->size;
+        }
+        startup_size = offset;
+        if (!startup_fixed)
+                startup_address = code_window_start;
+        offset = 0;
+        for (j = 0; j < 8; ++j) {
+                if (!(item = startup[j]))
+                        continue;
+                item->address = startup_address + offset;
+                if (startup_fixed)
+                        code_window_reserve(item->address, item->size, item->area, 0);
+                if (!startup_group.area)
+                        startup_group.area = item->area;
+                offset += item->size;
+        }
+        if (!startup_fixed && startup_size) {
+                /* Startup is one movable allocation, not an implicit fixed
+                   island.  On the packing retry a larger area may need the
+                   complete low window and startup must then move above HOME. */
+                startup_group.size = startup_size;
+                startup_group.alignment = 1;
+                memmove(movable + 1, movable, movable_count * sizeof(*movable));
+                movable[0] = &startup_group;
+                ++movable_count;
+        }
+
+        /* Preserve input ordering for ordinary small programs.  If that
+           cannot pack the two windows, retry deterministic largest-first
+           placement so small areas can occupy remaining gaps. */
+        fixed_count = code_window_range_count;
+        fixed_ranges = (struct code_window_range *)new((fixed_count + 1) * sizeof(*fixed_ranges));
+        memcpy(fixed_ranges, code_window_ranges, fixed_count * sizeof(*fixed_ranges));
+        for (attempt = 0; attempt < 2 && !placed; ++attempt) {
+                if (attempt)
+                        qsort(movable, movable_count, sizeof(*movable), code_window_largest_first);
+                code_window_range_count = fixed_count;
+                memcpy(code_window_ranges, fixed_ranges, fixed_count * sizeof(*fixed_ranges));
+                for (j = 0; j < movable_count; ++j) {
+                        item = movable[j];
+                        if (!code_window_find(item->size, item->alignment, &item->address))
+                                break;
+                        if (item == &startup_group) {
+                                unsigned int stage;
+                                offset = 0;
+                                for (stage = 0; stage < 8; ++stage) {
+                                        struct code_window_area *part = startup[stage];
+                                        if (!part)
+                                                continue;
+                                        part->address = item->address + offset;
+                                        code_window_reserve(part->address, part->size, part->area, 0);
+                                        offset += part->size;
+                                }
+                        } else {
+                                code_window_reserve(item->address, item->size, item->area, 0);
+                        }
+                }
+                placed = j == movable_count;
+        }
+        if (!placed) {
+                item = movable[j];
+                fprintf(stderr, "?ASlink-Error-code window has no contiguous space for "
+                        "%s (%lu bytes); use function/data sections or reduce the image\n",
+                        item->area->a_id, (unsigned long)item->size);
+                lkexit(ER_FATAL);
+        }
+        for (i = 0; i < count; ++i) {
+                item = &areas[i];
+                if (item->area->a_flag & A3_ABS)
+                        continue;
+                item->area->a_addr = item->address;
+                item->area->a_size = item->size;
+                item->area->a_bset = 1;
+        }
+}
+
+void
+codewindowmap(FILE *fp)
+{
+        unsigned int i;
+        struct code_window_range *range;
+        fprintf(fp, "\nCode Window: 0x%06lX:0x%06lX\n",
+                (unsigned long)code_window_start, (unsigned long)code_window_end);
+        for (i = 0; i < code_window_range_count; ++i) {
+                range = &code_window_ranges[i];
+                fprintf(fp, "Code Window Area: %s 0x%06lX 0x%06lX\n",
+                        range->area->a_id, (unsigned long)range->start,
+                        (unsigned long)(range->end - range->start));
+        }
+}
+
 /*
  * Resolve all bank/area addresses.
  */
@@ -1021,7 +1335,10 @@ a_uint lnksect2 (struct area *tap, int locIndex)
                         fchar='K';
 	}
 
-        if (tap->a_flag & A3_OVR) /* Overlayed sections */
+        /* MCS251 ABS records retain their .org addresses even when OVR is
+           specified.  Treat them as absolute fragments, not REL overlays. */
+        if ((tap->a_flag & A3_OVR) &&
+            !(TARGET_IS_MCS251 && (tap->a_flag & A3_ABS))) /* Overlayed sections */
         {
                 while (taxp)
                 {
@@ -1172,7 +1489,7 @@ a_uint lnksect2 (struct area *tap, int locIndex)
                                                 fprintf(stderr, "?ASlink-Error-memory overlap at 0x%X for %s\n", j, tap->a_id);
 				}
 			}
-                        else if (locIndex == 1)
+                        else if (locIndex == 1 && !code_window_enabled)
                         {
                                 allocate_space(taxp->a_addr, taxp->a_size, tap->a_id, codemap8051, sizeof (codemap8051));
 			}
@@ -1187,7 +1504,7 @@ a_uint lnksect2 (struct area *tap, int locIndex)
 	}
         else /* Concatenated sections */
         {
-                if ((locIndex == 1) && tap->a_size)
+                if ((locIndex == 1) && tap->a_size && !code_window_enabled)
                 {
                         addr = find_empty_space(addr, tap->a_size, tap->a_id, codemap8051, sizeof (codemap8051));
 		}
@@ -1262,13 +1579,23 @@ a_uint lnksect2 (struct area *tap, int locIndex)
 				}
                                 else /*For concatenated BIT, CODE, and XRAM areax's*/
                                 {
+                                        /* Match lnkcodewindow's size budget:
+                                           each nonempty function contribution
+                                           starts at an even address, with any
+                                           padding reserved inside its area. */
+                                        if (locIndex == 1 && code_window_enabled &&
+                                            !strncmp(tap->a_id, "CSEG_F_", 7) && (addr & 1))
+                                        {
+                                                ++addr;
+                                                ++size;
+                                        }
                                         //expand external stack
                                         if((fchar=='K') && (taxp->a_size == 1))
                                         {
                                                 taxp->a_size = 256-(addr & 0xFF);
 					}
                                         //find next unused address now
-                                        if (locIndex == 1)
+                                        if (locIndex == 1 && !code_window_enabled)
                                         {
                                                 addr = find_empty_space(addr, taxp->a_size, tap->a_id, codemap8051, sizeof (codemap8051));
                                                 allocate_space(addr, taxp->a_size, tap->a_id, codemap8051, sizeof (codemap8051));

@@ -88,14 +88,11 @@ static struct
   } stack;
   set *sendSet;
   symbol *currentFunc;
-  /* DPTR value tracking: when the code generator knows that dptr/dpxl
-     already hold a particular far-symbol address, it can skip the
-     redundant mov dptr,#X / mov dpxl,#Y pair.  The cache is invalidated
-     at every label (control-flow join) and after any instruction that
-     might modify dptr. */
+  /* DPTR value tracking is currently kept disabled in
+     loadDptrFromOperand(): not all raw DPX clobbers are tracked yet. */
   struct {
-    char symbol[64];      /* cached dptr value from opGet() */
-    char dpxlSymbol[64];  /* cached dpxl value from opGet() */
+    char symbol[64];
+    char dpxlSymbol[64];
     bool valid;
   } dptrCache;
 }
@@ -261,13 +258,27 @@ decrementFarPointer (void)
 static void
 loadFarPointerByte (bool code)
 {
-  if (code)
-    {
-      emitcode ("clr", "a");
-      emitcode ("movc", "a,@a+dptr");
-    }
-  else
-    emitcode ("mov", "a,@dpx");
+  /* The compatibility MOVC @A+DPTR uses the current PC region, not DPXL.
+     Both kinds of far pointer carry a flat address; Flash must be read
+     through DPX too when the constant and caller occupy different regions. */
+  (void)code;
+  emitcode ("mov", "a,@dpx");
+}
+
+/* Add a byte-sized table selector without dropping the carry at a 64 KiB
+   boundary.  A is scratch here; B can retain the selector for other tables. */
+static void
+addAccumulatorToFarPointer (void)
+{
+  _G.dptrCache.valid = false;
+  emitcode ("add", "a,dpl");
+  emitcode ("mov", "dpl,a");
+  emitcode ("clr", "a");
+  emitcode ("addc", "a,dph");
+  emitcode ("mov", "dph,a");
+  emitcode ("clr", "a");
+  emitcode ("addc", "a,dpxl");
+  emitcode ("mov", "dpxl,a");
 }
 
 static void
@@ -1086,7 +1097,7 @@ aopForRemat (symbol *sym)
   iCode *ic = sym->rematiCode;
   asmop *aop = newAsmop (AOP_IMMD);
   int ptr_type = 0;
-  int val = 0;
+  long long val = 0;
   sym_link *from_type = NULL;
   const char *from_name = NULL;
   struct dbuf_s dbuf;
@@ -1095,12 +1106,12 @@ aopForRemat (symbol *sym)
     {
       if (ic->op == '+')
         {
-          val += (int) operandLitValue (IC_RIGHT (ic));
+          val += (long long) operandLitValue (IC_RIGHT (ic));
           ic = OP_SYMBOL (IC_LEFT (ic))->rematiCode;
         }
       else if (ic->op == '-')
         {
-          val -= (int) operandLitValue (IC_RIGHT (ic));
+          val -= (long long) operandLitValue (IC_RIGHT (ic));
           ic = OP_SYMBOL (IC_LEFT (ic))->rematiCode;
         }
       else if (IS_CAST_ICODE (ic))
@@ -1119,7 +1130,16 @@ aopForRemat (symbol *sym)
   dbuf_init (&dbuf, 128);
   if (val)
     {
-      dbuf_printf (&dbuf, "(%s %c 0x%04x)", OP_SYMBOL (IC_LEFT (ic))->rname, val >= 0 ? '+' : '-', abs (val) & 0xffff);
+      bool negative = val < 0;
+      unsigned long long magnitude = negative ?
+        0ull - (unsigned long long) val : (unsigned long long) val;
+
+      /* MCS251 relocatable pointers are 24-bit.  Keep the complete folded
+         addend so the assembler can propagate carries into DPXL; the old
+         four-hex-digit formatting silently changed +0x11170 to +0x1170. */
+      dbuf_printf (&dbuf, "(%s %c 0x%llx)",
+                   OP_SYMBOL (IC_LEFT (ic))->rname,
+                   negative ? '-' : '+', magnitude);
     }
   else
     {
@@ -2042,7 +2062,7 @@ aopPutUsesAcc (const asmop* aop, const char *s, int offset)
       return TRUE;
     case AOP_R0:
     case AOP_R1:
-      return ((aop->paged) || (*s == '@'));
+      return ((aop->paged) || (*s == '@') || isFixedByteRegisterOperand (s));
     case AOP_STK:
       return (*s == '@');
     case AOP_CRY:
@@ -2211,9 +2231,10 @@ aopPut (asmop *aop, const char *s, int offset)
     case AOP_R1:
       /* Get source in A before inc/dec of r0/r1 */
       /* in case source needed different offset  */
-      if (aop->paged || *s == '@')
+      if (aop->paged || *s == '@' || isFixedByteRegisterOperand (s))
         {
           MOVA (s);
+          accuse = TRUE;
         }
 
       mcs251_setAopR01Offset (aop, offset);
@@ -2223,7 +2244,7 @@ aopPut (asmop *aop, const char *s, int offset)
           /* source already in A */
           emitcode ("movx", "@%s,a", aop->aopu.aop_ptr->name);
         }
-      else if (*s == '@')
+      else if (*s == '@' || isFixedByteRegisterOperand (s))
         {
           /* source already in A */
           emitcode ("mov", "@%s,a", aop->aopu.aop_ptr->name);
@@ -2327,17 +2348,16 @@ loadDptrFromOperand (operand *op, bool loadBToo)
             }
           else
             {
-              /* Check the DPTR cache: if dptr already points to the
-                 same far symbol+offset, skip the reload.
-                 opGet returns a pointer to a static buffer, so we must
-                 copy the strings before the next opGet call. */
+              /* opGet returns a pointer to a static buffer, so copy both
+                 complete operands before requesting the next one. */
               const char *dptr_name = opGet (op, 0, TRUE, FALSE);
               char *dptr_buf = Safe_strdup (dptr_name ? dptr_name : "");
               const char *dpxl_name = opGet (op, 2, FALSE, FALSE);
               char *dpxl_buf = Safe_strdup (dpxl_name ? dpxl_name : "");
-              bool cacheable =
-                strlen (dptr_buf) < sizeof(_G.dptrCache.symbol) &&
-                strlen (dpxl_buf) < sizeof(_G.dptrCache.dpxlSymbol);
+              /* DPX is also changed by raw far loads/stores and call
+                 sequences.  Until those clobbers are tracked centrally,
+                 conservatively materialize DPTR and DPXL at every use. */
+              bool cacheable = false;
 
               if (!cacheable)
                 {

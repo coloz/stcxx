@@ -43,7 +43,7 @@ endif
 
 $(MCS251_ASM_OBJ): %.rel: $(srcdir)/%.asm
 	test $(srcdir) = . || cp $< .
-	-$(AS) $(ASFLAGS) $(notdir $<)
+	$(AS) $(ASFLAGS) $(notdir $<)
 	test $(srcdir) = . || rm $(notdir $<)
 
 %.rel: $(MCS51_RUNTIME)/%.asm
@@ -54,7 +54,7 @@ $(MCS251_ASM_OBJ): %.rel: $(srcdir)/%.asm
 		-e 's/^\([[:space:]]*\)ret$$/\1eret/' \
 		-e 's/^\([[:space:]]*\)ret\([[:space:];]\)/\1eret\2/' \
 		$< > $*.asm
-	-$(AS) $(ASFLAGS) $*.asm
+	$(AS) $(ASFLAGS) $*.asm
 
 clean:
 	rm -f $(MCS51_GENERATED_ASM) *.rel *.sym *.lst *~ *.lib

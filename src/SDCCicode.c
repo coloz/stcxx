@@ -2463,7 +2463,7 @@ geniCodePtrPtrSubtract (operand * left, operand * right)
 
   ic = newiCode ('-', left, right);
 
-  IC_RESULT (ic) = result = newiTempOperand (newIntLink (), 1);
+  IC_RESULT (ic) = result = newiTempOperand (newPtrDiffLink (), 1);
   ADDTOCHAIN (ic);
 
 subtractExit:

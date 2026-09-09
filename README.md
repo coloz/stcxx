@@ -1,6 +1,6 @@
 # STCXX（STC++）
 
-STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目录名为 `stcxx`，原名为 `sdcc-c251-arduino`。它将修改后的 Clang、LLVM-CBE、Arduino 适配层与 SDCC 的 MCS-51 / MCS-251 后端组合，用于生成单片机固件。
+STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目录名为 `stcxx`。它将修改后的 Clang、LLVM-CBE、Arduino 适配层与 SDCC 的 MCS-51 / MCS-251 后端组合，用于生成单片机固件。
 
 C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链接成功只说明工具链完成了对应处理；具体芯片的启动、外设和烧录行为需要分别验证。
 
@@ -39,6 +39,8 @@ C++ 流水线核对 triple、数据布局和运行时 ABI，再将 LLVM-CBE 输�
 
 MCS-51 适用于 STC8、Ai8 等 8051 执行模式，MCS-251 适用于相应 STC32 执行模式。AI8051U 等双模式芯片必须让编译配置、链接地址和执行模式保持一致。具体 Flash 起点、容量和内存布局由 `arduino-stc51/variants/*/variant.json` 与板卡配置决定。
 
+2026-09-06 起，配套平台已移除 `STC8A8K64S4A12` 和 `STC32F12K54`，当前支持范围为 20 个型号、23 个执行配置；`stc-cli` 同步移除这两款的型号和 magic ID 记录。移除依据见[型号生命周期核查](../arduino-stc51/docs/variant-lifecycle.md)。本仓库提供通用 MCS-51 / MCS-251 编译后端，没有这两款的专用型号配置；其余在用型号继续使用这些后端。
+
 MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布局。两个目标的 ABI、运行库和目标文件不能混用。MCS-251 运行库提供 `small`、`small-stack-auto`、`large`、`large-stack-auto` 四组配置。
 
 ## 源码与版本
@@ -56,6 +58,9 @@ MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布�
 | `doc/` | SDCC 与 MCS-251 文档 |
 
 当前主要来源为 Clang **20.1.8**、LLVM-CBE 提交 **83f1bea**、SDCC 基线提交 **b09075b6**。完整版本与哈希以 [toolchain-lock.json](arduino/toolchain-lock.json) 为准。保留 `.git`、子模块、补丁和源码压缩包；构建脚本使用它们核对来源和准备补丁。
+
+2026-09-09 对比上游并修复的代码生成、内存分配、运行库和重定位问题，见
+[编译器审计记录](doc/mcs251/compiler-audit-20260909.md)。专用编译器、汇编器和诊断回归已恢复到构建检查流程。
 
 ## 构建与安装
 

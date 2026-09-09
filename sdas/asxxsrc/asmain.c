@@ -2920,7 +2920,8 @@ newdot(struct area *nap)
         /* fprintf (stderr, "%s dot.s_area->a_size: %d dot.s_addr: %d\n",
                 oap->a_id, dot.s_area->a_size, dot.s_addr); */
 	oap->a_fuzz = fuzz;
-        if (oap->a_flag & A_OVR) {
+        if ((oap->a_flag & A_OVR) &&
+            !(is_sdas_target_mcs251() && (oap->a_flag & A_ABS))) {
                 // the size of an overlay is the biggest size encountered
                 if (oap->a_size < dot.s_addr) {
                         oap->a_size = dot.s_addr;
@@ -2935,7 +2936,8 @@ newdot(struct area *nap)
                 oap->a_addr = 0;
                 oap->a_size = dot.s_addr;
 	}
-        if (nap->a_flag & A_OVR) {
+        if ((nap->a_flag & A_OVR) &&
+            !(is_sdas_target_mcs251() && (nap->a_flag & A_ABS))) {
                 // a new overlay starts at 0, no fuzz
 		dot.s_addr = 0;
 		fuzz = 0;
@@ -3067,4 +3069,3 @@ usage(void)
                 fprintf(stderr, "%s\n", *dp);
 	}
 }
-

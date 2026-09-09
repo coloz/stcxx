@@ -612,9 +612,22 @@ outrxb(int i, struct expr *esp, int r)
 void
 outrw(struct expr *esp, int r)
 {
-        int n;
+        int n, output_bytes = 2;
 
 	if (pass == 2) {
+                /* MCS251 short control transfers emit two address bytes but
+                   need the full addend for the link-time region check.  Even
+                   absolute targets must be relocated against .__.ABS. so a
+                   relocatable caller is checked at its final address. */
+                if (is_sdas() && is_sdas_target_mcs251() &&
+                    (IS_R_J16(r) || (r & R_MCS251_DISP))) {
+                        output_bytes = 3;
+                        r |= R_MCS251_24BIT;
+                        if (esp->e_flag == 0 && esp->e_base.e_ap == NULL) {
+                                esp->e_flag = 1;
+                                esp->e_base.e_sp = &sym[1];
+                        }
+                }
                 /* sdas specific */
                 if (is_sdas() && is_sdas_target_8051_like() && esp->e_addr > 0xffff) {
                     warnBanner();
@@ -657,8 +670,8 @@ outrw(struct expr *esp, int r)
                                         *relp++ = txtp - txt - 2;
                                         out_rw(n);
 				} else {
-                                        outchk(2, 5);
-                                        out_txb(2, esp->e_addr);
+                                        outchk(output_bytes, 5);
+                                        out_txb(output_bytes, esp->e_addr);
                                         if (esp->e_flag) {
                                                 n = esp->e_base.e_sp->s_ref;
                                                 r |= R_SYM;
@@ -677,7 +690,7 @@ outrw(struct expr *esp, int r)
                                                     "outrw()\n");
                                             rerr();
 					}
-                                        write_rmode(r, txtp - txt - 2);
+                                        write_rmode(r, txtp - txt - output_bytes);
                                         out_rw(n);
 				}
 			}
@@ -1790,9 +1803,13 @@ frthbyte(a_uint v)
 void
 outrwm(struct expr *esp, int r, a_uint v)
 {
-        int n;
+        int n, address_bytes = 2;
 
 	if (pass == 2) {
+		if (is_sdas() && is_sdas_target_mcs251() && (r & R_MCS251_CONTROL)) {
+			address_bytes = 3;
+			r |= R_MCS251_24BIT;
+		}
 		if (!is_sdas() || !is_sdas_target_8051_like()) {
                         if (esp->e_flag==0 && esp->e_base.e_ap==NULL) {
                                 /*
@@ -1816,8 +1833,8 @@ outrwm(struct expr *esp, int r, a_uint v)
                         n = (n << 8) | (esp->e_addr & 0xFF);
                         out_lw(n,r|R_RELOC);
 			if (oflag) {
-                                outchk(3, 4);
-                                out_txb(2, esp->e_addr);
+                                outchk(address_bytes + 1, 5);
+                                out_txb(address_bytes, esp->e_addr);
                                 *txtp++ = v;
 
 				if (esp->e_flag) {
@@ -1827,7 +1844,7 @@ outrwm(struct expr *esp, int r, a_uint v)
 					n = esp->e_base.e_ap->a_ref;
 				}
 				if (is_sdas() && is_sdas_target_mcs251())
-					write_rmode(r, txtp - txt - 3);
+					write_rmode(r, txtp - txt - address_bytes - 1);
 				else {
 					*relp++ = r;
 					*relp++ = txtp - txt - 3;

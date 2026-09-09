@@ -1434,6 +1434,51 @@ decode_UCNs_to_utf8 (char *dest, const char *src, size_t n)
   *dest = '\0';
 }
 
+/* Keep area identifiers below ASxxxx's NCPS limit, including long C++ names.
+   A source-qualified suffix separates static symbols in different TUs. */
+char *
+symbolSectionName (const char *prefix, const char *symbol)
+{
+  struct dbuf_s name;
+  const unsigned char *p;
+  static unsigned long sourceHash;
+  static bool sourceHashValid;
+  unsigned long hash;
+  unsigned int i;
+
+  if (!sourceHashValid)
+    {
+      const char *source = fullSrcFileName ? fullSrcFileName : moduleName;
+      /* argv can be just "foo.c" in multiple working directories.  Qualify
+         real source files before hashing so their static symbols do not get
+         merged into one linker area.  The driver compiles one TU per run. */
+#ifdef _WIN32
+      char *canonical = _fullpath (NULL, source, 0);
+#else
+      char *canonical = realpath (source, NULL);
+#endif
+      sourceHash = 2166136261UL;
+      for (p = (const unsigned char *)(canonical ? canonical : source); *p; ++p)
+        sourceHash = ((sourceHash ^ *p) * 16777619UL) & 0xffffffffUL;
+      free (canonical);
+      sourceHashValid = true;
+    }
+  hash = sourceHash;
+  hash = (hash * 16777619UL) & 0xffffffffUL;
+  for (p = (const unsigned char *)symbol; *p; ++p)
+    hash = ((hash ^ *p) * 16777619UL) & 0xffffffffUL;
+  dbuf_init (&name, 128);
+  dbuf_printf (&name, "%s_", prefix);
+  for (i = 0; symbol[i] && i < 96; ++i)
+    {
+      unsigned char c = symbol[i];
+      dbuf_append_char (&name, ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                               (c >= '0' && c <= '9') || c == '_') ? c : '_');
+    }
+  dbuf_printf (&name, "_%08lx", hash);
+  return dbuf_detach (&name);
+}
+
 void
 process_identifier (char *dest, const char *src, size_t n)
 {

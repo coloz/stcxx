@@ -179,6 +179,9 @@ long    xram_size = -1; /*      external ram size
 			 */
 long    code_size = -1; /*      code size
 			 */
+int     code_window_enabled;
+a_uint  code_window_start;
+a_uint  code_window_end;
 /* end sdld specific */
 
 /*

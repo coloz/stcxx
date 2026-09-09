@@ -378,7 +378,10 @@ emitRegularMap (memmap *map, bool addPublics, bool arFlag)
             dbuf_tprintf (&map->oBuf, "!slabeldef\n", sym->rname);
           else
             dbuf_tprintf (&map->oBuf, "!labeldef\n", sym->rname);
-          dbuf_tprintf (&map->oBuf, "\t!ds\n", (unsigned int) size & 0xffff);
+          /* MCS251 has a 24-bit flat object space.  Masking the extent to
+             16 bits turns a 64 KiB object into a zero-byte reservation. */
+          dbuf_tprintf (&map->oBuf, "\t!ds\n", TARGET_IS_MCS251 ?
+                        (unsigned int) size : (unsigned int) size & 0xffff);
         }
 
       sym->ival = NULL;
@@ -1922,6 +1925,9 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
       else
         {
           int size = getSize (sym->type);
+          bool splitConstant = TARGET_IS_MCS251 && options.data_sections &&
+            map == statsg && !SPEC_ABSA (sym->etype) && options.const_seg &&
+            !strcmp (options.const_seg, port->mem.const_name);
 
           if (size == 0 && !(IS_STRUCT (sym->type) &&
                              SPEC_STRUCT (sym->type)->b_empty_complete))
@@ -1937,6 +1943,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
                 }
               else if (options.const_seg && map != xinit && map != initializer)
                 dbuf_tprintf(&code->oBuf, "\t!area\n", options.const_seg);
+              if (splitConstant)
+                {
+                  char *section = symbolSectionName ("CONST_D", sym->rname);
+                  dbuf_printf (oBuf, "\t.area %s (CODE)\n", section);
+                  Safe_free (section);
+                }
               if (options.debug)
                 {
                   emitDebugSym (oBuf, sym);
@@ -1960,6 +1972,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
           else
             {//printf("no ival.\n");
               /* allocate space */
+              if (splitConstant)
+                {
+                  char *section = symbolSectionName ("CONST_D", sym->rname);
+                  dbuf_printf (oBuf, "\t.area %s (CODE)\n", section);
+                  Safe_free (section);
+                }
               if (options.debug)
                 {
                   emitDebugSym (oBuf, sym);
@@ -1971,7 +1989,7 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
                  IS_INT (sym->type->next) && !IS_LONG (sym->type->next) && SPEC_CVAL (sym->etype).v_char16 ||
                  IS_INT (sym->type->next) && IS_LONG (sym->type->next) && SPEC_CVAL (sym->etype).v_char32))
                 {
-                  if (options.const_seg)
+                  if (options.const_seg && !splitConstant)
                     dbuf_tprintf(&code->oBuf, "\t!area\n", options.const_seg);
                   dbuf_printf (oBuf, "%s:\n", sym->rname);
                   if (IS_CHAR (sym->type->next))
@@ -1988,7 +2006,10 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
               else
                 {
                   dbuf_printf (oBuf, "%s:\n", sym->rname);
-                  dbuf_tprintf (oBuf, "\t!ds\n", (unsigned int) size & 0xffff);
+                  dbuf_tprintf (oBuf, "\t!ds\n", TARGET_IS_MCS251 ?
+                                (unsigned int) size : (unsigned int) size & 0xffff);
+                  if (splitConstant)
+                    dbuf_tprintf (oBuf, "\t!areacode\n", options.code_seg);
                 }
             }
         }
@@ -2260,7 +2281,8 @@ emitOverlay (struct dbuf_s *aBuf)
 
               /* allocate space */
               dbuf_tprintf (aBuf, "!slabeldef\n", sym->rname);
-              dbuf_tprintf (aBuf, "\t!ds\n", (unsigned int) getSize (sym->type) & 0xffff);
+              dbuf_tprintf (aBuf, "\t!ds\n", TARGET_IS_MCS251 ?
+                            (unsigned int) size : (unsigned int) size & 0xffff);
             }
         }
     }

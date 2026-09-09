@@ -654,6 +654,12 @@ get_conversion_spec:
           OUTPUT_2DIGITS( value.byte[1] );
         }
         OUTPUT_2DIGITS( value.byte[0] );
+#elif defined (__SDCC_mcs251)
+        OUTPUT_CHAR('0', p);
+        OUTPUT_CHAR('x', p);
+        OUTPUT_2DIGITS( value.byte[0] );
+        OUTPUT_2DIGITS( value.byte[1] );
+        OUTPUT_2DIGITS( value.byte[2] );
 #elif __STDC_ENDIAN_NATIVE__ == __STDC_ENDIAN_BIG__
         OUTPUT_CHAR('0', p);
         OUTPUT_CHAR('x', p);

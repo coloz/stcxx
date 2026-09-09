@@ -17,7 +17,7 @@ SDCC_LIBS       = support/makebin
 SDCC_SCRIPTS    = support/scripts
 SDCC_DOC        = doc
 
-SDCC_EXTRA      =
+SDCC_EXTRA      = support/valdiag
 
 SDCC_PACKIHX    = support/packihx
 SDCC_SDBINUTILS = support/sdbinutils
@@ -49,7 +49,7 @@ endif
 
 ifeq ($(OPT_DISABLE_MCS251), 0)
 SDCC_AS        += sdas/as251
-SDCC_LD        += sdcc-ld8051
+SDCC_LD        += sdcc-ldmcs251
 endif
 
 ifneq ($(OPT_DISABLE_Z80)$(OPT_DISABLE_Z180)$(OPT_DISABLE_Z80N)$(OPT_DISABLE_R800), 1111)

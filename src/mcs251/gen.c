@@ -1780,6 +1780,15 @@ genFunction (iCode * ic)
 
   _G.dptrCache.valid = false;  /* new function: dptr is undefined */
 
+  /* Keep explicit --codeseg / #pragma codeseg placement intact.  Each
+     default function is indivisible, including its local jump tables. */
+  if (options.function_sections && !strcmp (options.code_seg, port->mem.code_name))
+    {
+      char *section = symbolSectionName ("CSEG_F", sym->rname);
+      emitcode (".area", "%s (CODE)", section);
+      Safe_free (section);
+    }
+
   /* create the function header */
   emitcode (";", "-----------------------------------------");
   emitcode (";", " function %s", sym->name);
@@ -3324,11 +3333,70 @@ mcs251GenDwordArithmetic (operand *left, operand *right, operand *result,
   return TRUE;
 }
 
+/* Return whether two logical scalar bytes name the same physical storage.
+   This is deliberately narrower than general pointer-alias analysis: it
+   covers locations whose identity is explicit in their asmops, including
+   differently-sized temporaries assigned to the same spill slot. */
+static bool
+mcs251ArithmeticSameStorageByte (const asmop *left, int leftOffset,
+                                  const asmop *right, int rightOffset)
+{
+  int leftPhysical;
+  int rightPhysical;
+
+  if (leftOffset < 0 || leftOffset >= left->size ||
+      rightOffset < 0 || rightOffset >= right->size)
+    return FALSE;
+
+  if ((left->type == AOP_REG || left->type == AOP_ACC) &&
+      (right->type == AOP_REG || right->type == AOP_ACC))
+    return left->aopu.aop_reg[leftOffset] ==
+      right->aopu.aop_reg[rightOffset];
+
+  if (left->type != right->type)
+    return FALSE;
+
+  leftPhysical = mcs251ScalarByteOffset (left, leftOffset);
+  rightPhysical = mcs251ScalarByteOffset (right, rightOffset);
+
+  switch (left->type)
+    {
+    case AOP_DIR:
+      return EQ (left->aopu.aop_dir, right->aopu.aop_dir) &&
+        leftPhysical == rightPhysical;
+
+    case AOP_SFR:
+      return EQ (left->aopu.aop_dir, right->aopu.aop_dir) &&
+        leftOffset == rightOffset;
+
+    case AOP_DPTR:
+      return left->aopu.aop_sym && right->aopu.aop_sym &&
+        (left->aopu.aop_sym == right->aopu.aop_sym ||
+         EQ (left->aopu.aop_sym->rname, right->aopu.aop_sym->rname)) &&
+        leftPhysical == rightPhysical;
+
+    case AOP_MCS251_STK:
+      return left->aopu.aop_sym && right->aopu.aop_sym &&
+        stackoffset (left->aopu.aop_sym) + leftPhysical ==
+          stackoffset (right->aopu.aop_sym) + rightPhysical;
+
+    case AOP_STR:
+      return left->aopu.aop_str[leftOffset] &&
+        right->aopu.aop_str[rightOffset] &&
+        EQ (left->aopu.aop_str[leftOffset],
+            right->aopu.aop_str[rightOffset]);
+
+    default:
+      return FALSE;
+    }
+}
+
 /* Multi-byte arithmetic proceeds from the low byte towards the high byte so
-   that carry propagates naturally.  A destination register can nevertheless
-   alias a source register that a later iteration still has to read.  For
-   example, [r7,r6,r5] + 5 -> [r5,r4,r3] must not overwrite source r5 while
-   producing destination byte zero. */
+   that carry propagates naturally.  A destination byte can nevertheless
+   alias a source byte that a later iteration still has to read.  Besides
+   partially-overlapping register tuples, MCS251's big-endian scalar layout
+   exposes this when a three-byte pointer result reuses a four-byte integer
+   spill slot: result byte zero and source byte one both reside at base+2. */
 static bool
 mcs251ArithmeticHasDestructiveOverlap (operand *result, operand *left,
                                         operand *right, int size)
@@ -3338,19 +3406,16 @@ mcs251ArithmeticHasDestructiveOverlap (operand *result, operand *left,
   asmop *rightAop = AOP (right);
   int destination, source;
 
-  if (resultAop->type != AOP_REG)
-    return FALSE;
-
   for (destination = 0; destination < size; ++destination)
     for (source = destination + 1; source < size; ++source)
       {
-        if (leftAop->type == AOP_REG && source < leftAop->size &&
-            resultAop->aopu.aop_reg[destination] ==
-              leftAop->aopu.aop_reg[source])
+        if (source < leftAop->size &&
+            mcs251ArithmeticSameStorageByte (resultAop, destination,
+                                             leftAop, source))
           return TRUE;
-        if (rightAop->type == AOP_REG && source < rightAop->size &&
-            resultAop->aopu.aop_reg[destination] ==
-              rightAop->aopu.aop_reg[source])
+        if (source < rightAop->size &&
+            mcs251ArithmeticSameStorageByte (resultAop, destination,
+                                             rightAop, source))
           return TRUE;
       }
 
@@ -3469,6 +3534,8 @@ genPlus (iCode * ic)
 
   deferResultWrites = mcs251ArithmeticHasDestructiveOverlap (
     IC_RESULT (ic), leftOp, rightOp, size);
+  if (deferResultWrites)
+    D (emitcode (";", "MCS251 deferred overlapping arithmetic result"));
 
   /* if the lower bytes of a literal are zero skip the addition */
   if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
@@ -3758,6 +3825,7 @@ static void
 genMinus (iCode * ic)
 {
   int size, offset = 0;
+  bool deferResultWrites;
 
   D (emitcode (";", "genMinus"));
 
@@ -3795,6 +3863,11 @@ genMinus (iCode * ic)
                                IC_RESULT (ic), "sub", FALSE))
     goto release;
 
+  deferResultWrites = mcs251ArithmeticHasDestructiveOverlap (
+    IC_RESULT (ic), IC_LEFT (ic), IC_RIGHT (ic), size);
+  if (deferResultWrites)
+    D (emitcode (";", "MCS251 deferred overlapping arithmetic result"));
+
   /* if literal, add a,#-lit, else normal subb */
   if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
     {
@@ -3825,12 +3898,21 @@ genMinus (iCode * ic)
                 }
               if (!size && maskedtopbyte)
                 emitcode ("anl", "a,#!constbyte", topbytemask);
-              opPut (IC_RESULT (ic), "a", offset++);
+              if (deferResultWrites)
+                emitpush ("acc");
+              else
+                opPut (IC_RESULT (ic), "a", offset);
+              offset++;
             }
           else
             {
               /* no need to add zeroes */
-              if (!sameRegs (AOP (IC_RESULT (ic)), AOP (IC_LEFT (ic))))
+              if (deferResultWrites)
+                {
+                  MOVA (opGet (IC_LEFT (ic), offset, FALSE, FALSE));
+                  emitpush ("acc");
+                }
+              else if (!sameRegs (AOP (IC_RESULT (ic)), AOP (IC_LEFT (ic))))
                 {
                   opPut (IC_RESULT (ic), opGet (IC_LEFT (ic), offset, FALSE, FALSE), offset);
                 }
@@ -3889,9 +3971,20 @@ genMinus (iCode * ic)
 
           if (!size && maskedtopbyte)
             emitcode ("anl", "a,#!constbyte", topbytemask);
-          opPut (IC_RESULT (ic), "a", offset++);
+          if (deferResultWrites)
+            emitpush ("acc");
+          else
+            opPut (IC_RESULT (ic), "a", offset);
+          offset++;
         }
     }
+
+  if (deferResultWrites)
+    while (offset-- > 0)
+      {
+        emitpop ("acc");
+        opPut (IC_RESULT (ic), "a", offset);
+      }
 
   adjustArithmeticResult (ic);
 
@@ -8945,7 +9038,7 @@ emitPtrByteSet (const char *rname, int p_type, const char *src)
     {
     case IPOINTER:
     case POINTER:
-      if (*src == '@')
+      if (*src == '@' || isFixedByteRegisterOperand (src))
         {
           MOVA (src);
           emitcode ("mov", "@%s,a", rname);
@@ -10117,7 +10210,8 @@ genNearPointerSet (operand * right, operand * result, iCode * ic, iCode * pi)
             operandType (right), physicalOffset,
             AOP_SIZE (right));
           const char *l = opGet (right, logicalOffset, FALSE, TRUE);
-          if ((*l == '@') || (EQ (l, "acc")))
+          /* Fixed Rn operands cannot be the direct source of MOV @Ri,direct. */
+          if ((*l == '@') || (EQ (l, "acc")) || isFixedByteRegisterOperand (l))
             {
               MOVA (l);
               emitcode ("mov", "@%s,a", rname);
@@ -10776,7 +10870,9 @@ genJumpTab (iCode * ic)
       jtab = newiTempLabel (NULL);
       emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtab->key));
       emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtab->key));
-      emitcode ("jmp", "@a+dptr");
+      addAccumulatorToFarPointer ();
+      emitcode ("mov", "dr28,dpx");
+      emitcode ("ejmp", "@dr28");
       emitLabel (jtab);
       /* now generate the jump labels */
       for (jtab = setFirstItem (IC_JTLABELS (ic)); jtab; jtab = setNextItem (IC_JTLABELS (ic)))
@@ -10802,19 +10898,22 @@ genJumpTab (iCode * ic)
       MOVA (l);
       emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtablo->key));
       emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtablo->key));
-      emitcode ("movc", "a,@a+dptr");
+      addAccumulatorToFarPointer ();
+      loadFarPointerByte (TRUE);
       emitpush ("acc");
 
       MOVA (l);
       emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtabhi->key));
       emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtabhi->key));
-      emitcode ("movc", "a,@a+dptr");
+      addAccumulatorToFarPointer ();
+      loadFarPointerByte (TRUE);
       emitpush ("acc");
 
       MOVA (l);
       emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtabext->key));
       emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtabext->key));
-      emitcode ("movc", "a,@a+dptr");
+      addAccumulatorToFarPointer ();
+      loadFarPointerByte (TRUE);
       emitcode ("mov", "dpxl,a");
       emitpop ("dph");
       emitpop ("dpl");

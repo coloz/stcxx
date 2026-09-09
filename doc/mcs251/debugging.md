@@ -94,8 +94,8 @@ default/stack-auto library combinations.
 
 ## Historical signed-displacement diagnostic
 
-The earlier aggregate-return regression provides a recorded example of this method;
-its project-specific fixture is no longer distributed here.
+The aggregate-return regression provides a recorded example of this method;
+its fixture is available at `src/mcs251/tests/aggregate-return.c`.
 At PC `0xfc2837`, SPX is `0x0039` and the legal instruction is encoded as
 `mov r11,@dr60+0xfffb`, i.e. `mov a,@spx-5`.  The intended address is
 `0x0034`, where the caller pushed the three-byte hidden result pointer.  A

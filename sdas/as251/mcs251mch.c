@@ -128,8 +128,10 @@ out_displacement(struct expr *esp)
 
 	if (is_abs(esp) && !immediate_fits(esp->e_addr, 16))
 		xerr('a', "Indexed MOV displacement must fit in 16 bits.");
-	displacement.e_addr &= 0xFFFF;
-	outrw(&displacement, R_NORM);
+	/* The register number lives above the 24-bit expression addend.  Keep
+	   all expression bits (including negative offsets) for relocation. */
+	displacement.e_addr &= 0xFFFFFF;
+	outrw(&displacement, R_MCS251_DISP);
 }
 
 #define BIT_CLASSIC 1
@@ -248,7 +250,7 @@ out_control16(struct expr *target)
 {
 	a_uint next = dot.s_addr + 2;
 
-	if (pass == 2 &&
+	if (pass == 2 && (dot.s_area->a_flag & A_ABS) &&
 	    (is_abs(target) || target->e_base.e_ap == dot.s_area) &&
 	    ((target->e_addr ^ next) & ~((a_uint) 0xFFFF)))
 		xerr('a', "LCALL/LJMP target is outside the current 64K region.");
@@ -260,7 +262,7 @@ out_control11(struct expr *target, a_uint opcode)
 {
 	a_uint next = dot.s_addr + 2;
 
-	if (pass == 2 &&
+	if (pass == 2 && (dot.s_area->a_flag & A_ABS) &&
 	    (is_abs(target) || target->e_base.e_ap == dot.s_area) &&
 	    ((target->e_addr ^ next) & ~((a_uint) 0x07FF)))
 		xerr('a', "ACALL/AJMP target is outside the current 2K page.");
@@ -326,10 +328,12 @@ select_control_form(struct expr *target, int allow_relative)
 	    (int) value - (int) (here + 2) >= -128 &&
 	    (int) value - (int) (here + 2) <= 127) {
 		form = 0;
-	} else if ((target->e_base.e_ap == dot.s_area || is_abs(target)) &&
+	} else if ((dot.s_area->a_flag & A_ABS) &&
+	           (target->e_base.e_ap == dot.s_area || is_abs(target)) &&
 	           (value >> 11) == ((here + 2) >> 11)) {
 		form = 1;
-	} else if ((target->e_base.e_ap == dot.s_area || is_abs(target)) &&
+	} else if ((dot.s_area->a_flag & A_ABS) &&
+	           (target->e_base.e_ap == dot.s_area || is_abs(target)) &&
 	           (value >> 16) == ((here + 3) >> 16)) {
 		form = 2;
 	} else {
@@ -951,7 +955,17 @@ machine(struct mne *mp)
 					outrb(&e1, R_NORM);
 				} else {
 					putcode(0x17E);
-					if (v1 == 2 && (e1.e_addr & 0xFF0000) == 0xFF0000)
+					/* The opcode supplies the high word of a DR immediate.
+					 * A relocatable expression's value is only its addend:
+					 * __start__stack - 1 is not the absolute constant -1.
+					 */
+					if (v1 == 2 && is_abs(&e1) &&
+					    (e1.e_addr & a_mask) > 0xFFFF &&
+					    (e1.e_addr & a_mask & ~((a_uint) 0xFFFF)) !=
+					    (a_mask & ~((a_uint) 0xFFFF)))
+						xerr('a', "MOV DR immediate requires a zero-filled or one-filled high word.");
+					if (v1 == 2 && is_abs(&e1) &&
+					    (e1.e_addr & a_mask) > 0xFFFF)
 						outab((dst << 4) | 0x0C);
 					else
 						outab((dst << 4) | (v1 << 2));

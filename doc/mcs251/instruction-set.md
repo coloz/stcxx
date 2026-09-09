@@ -19,9 +19,9 @@ coverage review:
 
 Therefore the assembler-level answer is **yes**: every instruction family and
 legal operand form in the reviewed ISA matrix was accepted and checked
-against golden bytes in both opcode maps. Those project-specific fixtures
-have been removed from the distribution; these figures describe recorded
-coverage, not a test result produced by the current build.
+against golden bytes in both opcode maps. The upstream fixtures and `check`
+entry point were restored during the 2026-09-09 compiler audit; the matrix is
+now executable again in this tree.
 
 This does not mean that the C compiler deliberately emits all 269 forms.  A C
 backend selects instructions according to types, the ABI, register allocation
@@ -31,8 +31,8 @@ layer.  Compiler completeness is reported separately below.
 
 ## ISA matrix
 
-The following counts summarize the previous instruction-form matrix. Its
-machine-readable fixtures and test runners are no longer included. Current
+The following counts summarize the instruction-form matrix. Its
+machine-readable fixtures and test runners are in `sdas/as251/tests/`. Current
 implementation sources are [`mcs251pst.c`](../../sdas/as251/mcs251pst.c),
 [`mcs251mch.c`](../../sdas/as251/mcs251mch.c) and
 [`mcs251adr.c`](../../sdas/as251/mcs251adr.c).
@@ -72,17 +72,16 @@ architectural instruction families and are consequently excluded from the
 
 ## Validation scope
 
-The earlier assembler checks covered golden instruction bytes, Source/Binary
-maps, 24-bit relocations and representative invalid operands. Their removed
-`check` Makefile target is not a current build entry point. Building the
-assembler confirms compilation only; new ISA or diagnostic changes need
-separate validation against authoritative encodings and hardware behavior.
+The assembler checks cover golden instruction bytes, Source/Binary maps,
+24-bit relocations and representative invalid operands. Run
+`make -C BUILD/sdas/as251 check`. Building the assembler alone confirms
+compilation only; silicon validation remains a separate requirement.
 
 ## Compiler-generated instructions
 
-The removed project compiler gate covered small, large, small stack-auto and
-large stack-auto configurations. Its recorded code-generation assertions
-included:
+The restored compiler gate covers small, large, small stack-auto and
+large stack-auto configurations. Run `make -C BUILD/src/mcs251 check`.
+Its code-generation assertions include:
 
 - native stepped `INC`/`DEC`;
 - native `MOVS`/`MOVZ` byte extension and `MOVH` high-word replacement;

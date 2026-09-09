@@ -1,8 +1,9 @@
 # MCS251 / STC32G 官方示例取证与 clean-room 测试转化计划
 
-> Historical design plan: project-specific example fixtures and their `check` /
-> `check-qemu` runners have been removed. Paths and gate descriptions below
-> document the earlier plan and are not executable instructions for this tree.
+> Historical design plan: the upstream example fixtures and `check-qemu`
+> runners were restored during the 2026-09-09 compiler audit. Peripheral and
+> debugger cases still require a QEMU build implementing those facilities;
+> `check-runtime-qemu` checks compiler/runtime semantics independently.
 
 
 > 调查日期：2026-08-01（Asia/Shanghai）

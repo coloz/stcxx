@@ -9,6 +9,7 @@
 /windows-package/
 /sdcc-build/
 /qemu-traces/
+/.release-work/
 /sdcc-mcs251-windows-x64-*.zip
 __pycache__/
 *.pyc

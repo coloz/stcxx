@@ -941,6 +941,7 @@ src/Makefile
 device/include/Makefile
 sdas/linksrc/Makefile
 support/makebin/Makefile
+support/valdiag/Makefile
 support/scripts/Makefile
 Makefile
 Makefile.common:Makefile.common.in

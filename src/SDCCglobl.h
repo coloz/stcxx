@@ -303,6 +303,8 @@ struct options
     int xram_size;              /* external ram size (used only for error checking) */
     bool xram_size_set;         /* since xram_size=0 is a possibility */
     int code_size;              /* code size (used only for error checking) */
+    int function_sections;     /* MCS251: independently placeable functions */
+    int data_sections;         /* MCS251: independently placeable code constants */
     int verboseExec;            /* show what we are doing */
     int noXinitOpt;             /* don't optimize initialized xdata */
     int noCcodeInAsm;           /* hide c-code from asm */

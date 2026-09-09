@@ -365,6 +365,8 @@ extern	int	ASxxxx_VERSION;
 #define R_C24      (R3_WORD|R3_BYT1|R3_MSB) /* 24 bit address (DS80C390) */
 #define R_MCS251_CONTROL 0x0800                /* MCS-251 paged control-transfer semantics */
 #define R_J16      R_MCS251_CONTROL            /* 16 bit jump/call in same 64K region */
+#define R_MCS251_24BIT R3_USGN                 /* Full 24-bit addend for R_J11/R_J16 */
+#define R_MCS251_DISP R_BIT                   /* Word: checked native indexed displacement */
 #define R_J19_MASK (R3_BYTE|R3_BYTX|R3_MSB)
 
 #define IS_R_J19(x) (((x) & R_J19_MASK) == R3_J19)
@@ -1169,6 +1171,9 @@ extern  long xram_size;         /*      external ram size
                                  */
 extern  long code_size;         /*      code size
                                  */
+extern int code_window_enabled; /* MCS251 bounded whole-area Flash placement */
+extern a_uint code_window_start;
+extern a_uint code_window_end;  /* exclusive, may be 0x1000000 */
 extern  char *sdld_output;      /*      output file name, --output argument
                                  */
 extern char *optsdcc;
@@ -1245,6 +1250,8 @@ extern	void		unget(int c);
 extern	void		lkparea(char *id);
 extern	void		lnkarea(void);
 extern  void            lnkarea2(void);
+extern void            lnkcodewindow(void);
+extern void            codewindowmap(FILE *fp);
 extern	void		newarea(void);
 
 /* lkbank.c */
