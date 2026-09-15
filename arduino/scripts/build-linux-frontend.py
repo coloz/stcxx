@@ -112,10 +112,15 @@ def main(argv=None, *, host='linux', entrypoint=None):
             if not re.fullmatch('[0-9a-f]{64}', expected) or sha256(path) != expected:
                 parser.error('locked input differs: ' + str(path))
             inputs[section + '-' + path.name] = path
+    for key in ('manifest', 'helper'):
+        path = root / lock['vendored_sources'][key]
+        if sha256(path) != lock['vendored_sources'][key + '_sha256']:
+            parser.error('locked vendored input differs: ' + str(path))
+        inputs[path.name] = path
     cbe_commit = lock['llvm_cbe']['commit']
     if not re.fullmatch('[0-9a-f]{40}', cbe_commit): parser.error('invalid CBE source commit')
     tools = {}
-    requested_tools = {name: name for name in ('gcc', 'g++', 'git', 'patch', 'ninja', 'llvm-config-20', args.cmake)}
+    requested_tools = {name: name for name in ('gcc', 'g++', 'patch', 'ninja', 'llvm-config-20', args.cmake)}
     if host == 'darwin':
         requested_tools.update({'gcc': args.cc, 'g++': args.cxx, 'llvm-config-20': args.llvm_config,
                                 'xcrun': '/usr/bin/xcrun', 'otool': '/usr/bin/otool'})
@@ -199,16 +204,16 @@ def main(argv=None, *, host='linux', entrypoint=None):
         for name, expected in lock['clang']['patched_source_normalized_sha256'].items():
             normalized = (clang_source / name).read_bytes().replace(b'\r\n', b'\n')
             if hashlib.sha256(normalized).hexdigest() != expected: raise RuntimeError('patched Clang source differs: ' + name)
-        cbe_repository = root / 'toolchain/llvm-cbe'
-        git = ['git', '-c', 'safe.directory=' + str(cbe_repository), '-C', cbe_repository]
-        observed = run('cbe-commit', git + ['rev-parse', cbe_commit + '^{commit}']).strip()
-        if observed != cbe_commit: raise RuntimeError('CBE commit mismatch')
         cbe_archive = input_root / 'llvm-cbe-base.tar'
-        run('cbe-archive', git + ['archive', '--format=tar', cbe_commit], stdout_path=cbe_archive)
+        cbe_patch = input_root / ('llvm_cbe-' + Path(lock['llvm_cbe']['patch']).name)
+        run('cbe-archive', [sys.executable, input_root / Path(lock['vendored_sources']['helper']).name,
+                          '--root', root, '--lock', input_root / 'source-lock.json',
+                          '--manifest', input_root / Path(lock['vendored_sources']['manifest']).name,
+                          '--cbe-patch', cbe_patch, '--cbe-archive', cbe_archive])
+        report['cbe_upstream_commit'] = cbe_commit
         report['cbe_base_archive_sha256'] = sha256(cbe_archive)
         cbe_source = work / 'source/llvm-cbe'
         unpack_source(cbe_archive, cbe_source)
-        cbe_patch = input_root / ('llvm_cbe-' + Path(lock['llvm_cbe']['patch']).name)
         run('cbe-patch-check', ['patch', '--dry-run', '--batch', '-d', cbe_source, '-p1', '-i', cbe_patch])
         run('cbe-patch', ['patch', '--batch', '-d', cbe_source, '-p1', '-i', cbe_patch])
         run('cbe-reverse-check', ['patch', '--reverse', '--dry-run', '--batch', '-d', cbe_source, '-p1', '-i', cbe_patch])

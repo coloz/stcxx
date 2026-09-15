@@ -52,7 +52,8 @@ MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布�
 | 路径 | 用途 |
 | --- | --- |
 | `src/`、`device/`、`sdas/`、`support/` | SDCC、运行库、汇编/链接与配套工具 |
-| `toolchain/llvm-project/`、`toolchain/llvm-cbe/` | LLVM / Clang 与 LLVM-CBE 子模块 |
+| `toolchain/llvm-project/`、`toolchain/llvm-cbe/` | 主仓库直接管理的 Clang / CMake 与 LLVM-CBE 源码，已应用 STC 补丁 |
+| `toolchain/source-manifest.json` | 导入源码的完整文件清单、Git 文件模式、SHA-256 和上游版本 |
 | `arduino/patches/` | Clang、LLVM-CBE 和 SDCC 修改补丁 |
 | `arduino/bridge/` | LLVM IR / C 审计和适配器 |
 | `arduino/scripts/` | 源码准备、构建和发布入口 |
@@ -61,7 +62,7 @@ MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布�
 | `out/` | 生成的可移动 SDCC 工具包 |
 | `doc/` | SDCC 与 MCS-251 文档 |
 
-当前主要来源为 Clang **20.1.8**、LLVM-CBE 提交 **83f1bea**、SDCC 基线提交 **b09075b6**。完整版本与哈希以 [toolchain-lock.json](arduino/toolchain-lock.json) 为准。保留 `.git`、子模块、补丁和源码压缩包；构建脚本使用它们核对来源和准备补丁。
+当前主要来源为 Clang **20.1.8**、LLVM-CBE 提交 **83f1bea**、SDCC 基线提交 **b09075b6**。完整版本与哈希以 [toolchain-lock.json](arduino/toolchain-lock.json) 为准。LLVM-CBE 完整源码和 LLVM 的 `clang/`、`cmake/`、根目录文件已直接纳入主仓库，普通克隆即可取得，无需初始化子模块。保留主仓库 `.git`、补丁和源码压缩包；SDCC 校验仍使用主仓库历史，前端源码通过受锁定的文件清单核验。上游许可证随源码保留。
 
 2026-09-09 对比上游并修复的代码生成、内存分配、运行库和重定位问题，见
 [编译器审计记录](doc/mcs251/compiler-audit-20260909.md)。专用编译器、汇编器和诊断回归已恢复到构建检查流程。
@@ -90,7 +91,6 @@ llvm-config-20 --cmakedir
 
 ```sh
 cd /mnt/d/Git/stc51/stcxx
-git submodule update --init --recursive
 export STC_TOOLCHAIN_BUILD_JOBS=4
 bash arduino/scripts/build-wsl.sh /var/tmp/stcxx-build all
 ```
@@ -98,7 +98,7 @@ bash arduino/scripts/build-wsl.sh /var/tmp/stcxx-build all
 构建目录必须是**尚不存在的绝对路径**。脚本自动准备和核对源码，然后构建三个阶段。`STC_TOOLCHAIN_BUILD_JOBS` 控制 Clang / LLVM-CBE 并行度；当前 SDCC 阶段使用 `make -j1`。
 
 另有用于 Linux 分发候选的独立前端构建入口。它直接读取受锁的 Clang/CMake
-源码归档和 CBE 提交，在新目录中应用补丁并核对修改后源码，不改写子模块工作树：
+源码归档和受锁定的 CBE 源码快照，在新目录中应用补丁并核对修改后源码，不改写项目工作树：
 
 ```sh
 python3 arduino/scripts/build-linux-frontend.py --build-root /var/tmp/stcxx-frontend --jobs 4

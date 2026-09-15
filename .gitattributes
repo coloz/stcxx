@@ -7,4 +7,6 @@ support/regression/tests/bitfields-nibbles.c.in whitespace=cr-at-eol
 *.patch text eol=lf whitespace=-trailing-space,-space-before-tab
 *.json text eol=lf
 *.md text eol=lf
-.gitmodules text eol=lf
+# Preserve exact upstream bytes, including binary and line-ending fixtures.
+/toolchain/llvm-project/** -text
+/toolchain/llvm-cbe/** -text

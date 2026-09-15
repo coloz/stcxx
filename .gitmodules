@@ -1,9 +1,0 @@
-[submodule "toolchain/llvm-cbe"]
-	path = toolchain/llvm-cbe
-	url = https://github.com/JuliaHubOSS/llvm-cbe.git
-	# The prepared worktree applies the versioned arduino/patches patch.
-	ignore = dirty
-[submodule "toolchain/llvm-project"]
-	path = toolchain/llvm-project
-	url = https://github.com/llvm/llvm-project.git
-	ignore = dirty

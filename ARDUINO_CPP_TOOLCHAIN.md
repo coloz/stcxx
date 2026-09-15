@@ -14,9 +14,9 @@ startup code, the runtime and the final chip-specific linker layout.
 
 ## Sources and identity
 
-- `toolchain/llvm-project/clang`: Clang 20.1.8 source. Its STC IR target patch
+- `toolchain/llvm-project/clang`: vendored Clang 20.1.8 source. Its STC IR target patch
   is `arduino/patches/clang-20.1.8-stcsdcc-ir-only.patch`.
-- `toolchain/llvm-cbe`: LLVM-CBE at commit `83f1bea66c7415c701925470a2f7596b37153197`.
+- `toolchain/llvm-cbe`: vendored LLVM-CBE from commit `83f1bea66c7415c701925470a2f7596b37153197`.
   Its STC address-space and C lowering changes are in
   `arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch`.
 - The repository root contains SDCC based on `gevico/sdcc-c251` commit
@@ -25,6 +25,11 @@ startup code, the runtime and the final chip-specific linker layout.
 - `arduino/bridge` holds the IR audit and LLVM-CBE-to-SDCC C adapter.
 - `arduino/toolchain-lock.json` records source, patch, ABI and reference-tool
   identities. `arduino/sources` retains the locked Clang/CMake source archives.
+- Both frontend source directories are ordinary tracked files with STC patches
+  already applied. LLVM includes `clang/`, `cmake/` and root files; LLVM-CBE is
+  complete. `toolchain/source-manifest.json` records every imported file's
+  exact SHA-256, Git mode and upstream provenance. No submodule checkout or
+  upstream Git objects are needed. Licenses are retained in the source trees.
 
 The source checker verifies production inputs and patch application. Project
 regression fixtures are not part of the source build contract. Source hashes,
@@ -44,9 +49,12 @@ The stages `clang`, `llvm-cbe`, `sdcc` and `all` are accepted. The script
 prepares and checks source state itself. To inspect source preparation
 separately, run `prepare-sources-wsl.sh` before `check-sources-wsl.sh`.
 
-The source preparation step normalizes line endings only in the explicitly
-listed patch-target files, verifies locked commits and patch hashes, and
-applies the Clang/LLVM-CBE patches using ordinary Git checks.
+The source preparation step verifies the vendored inventory and exact file
+hashes without changing the checkout. The source checker also verifies retained
+patches. Native Linux/macOS frontend builds reconstruct an upstream CBE archive
+by reversing the STC patch in a private copy and checking every upstream file
+hash, then use the existing patch/build pipeline. This needs no nested Git
+repository. Clang still builds from the locked Clang/CMake source archives.
 
 Publish the SDCC build into a new output directory:
 

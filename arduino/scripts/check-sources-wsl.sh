@@ -50,12 +50,13 @@ check_sha 44d9b17a5b92b816a99f24102cae00232b81c8d0c39dd880462083ef67b719dd "${re
 check_sha dc46bd49852002e4a9fc992863d9ba3f14eaea27b3d84a4b7d02249fe1cc0313 "${repo_root}/arduino/bridge/fixtures/mcs51-pointers/native.c"
 check_sha c304295fe89c3f1f7680c8c5797c56bdcb7d5206a595bd9b94366007d4492f6f "${repo_root}/arduino/bridge/fixtures/mcs51-pointers/scalar.cpp"
 check_sha d89d1a430676e178979310c856f7e331a6c18bb2f640d4afa9bef2810ba8aa50 "${repo_root}/arduino/scripts/build-wsl.sh"
-check_sha 8275666403caacf3f801f2ad184fc09f0b01cb86540c14ca156702e66f78a868 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
+check_sha f5ef46e92a1118224cacfe08d69b4a0e4a95d97ed5bc2677361b5c1cebcab710 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
 check_sha d0d88b0d94f1ac74a709c57115c67f89afe65e96e64c9b51efd83ddc40928cd6 "${repo_root}/arduino/wrappers/sdcc"
 check_sha 8bf66efb6f3e56ff21354e8d7a26a7b701a8c3b19466ab2e3951bd2aaac16cf2 "${repo_root}/arduino/wrappers/sdcpp"
 check_sha 973bde145e6c221a335c1996f126faf8bebb4a76c0047308788c3a3891d6edb7 "${repo_root}/arduino/scripts/test_tool_wrappers.py"
 check_sha 6a2647c7f465cf06ebe77c5d578155c8702202c035476006ce26c6f91eb3c1d4 "${repo_root}/src/mcs251/tests/check-mullong-runtime.py"
 check_sha 2f588794315a2a28fef3ca96bf63b2eb4fa48817a8cc32b4443fb14f0d65a373 "${repo_root}/src/mcs251/tests/check-heap-split-runtime.py"
+check_sha ac328da4cfa8fceef8b3136ee64bf3b809d9ef2e334c95d7053165588d7ab738 "${repo_root}/arduino/scripts/vendor_sources.py"
 bash -n "${repo_root}/arduino/wrappers/sdcc"
 bash -n "${repo_root}/arduino/wrappers/sdcpp"
 
@@ -78,9 +79,8 @@ check_normalized_sha 5609713403d6043ef43aa8ea7c5bf99b65abda094a4fb97411d458027cd
 
 git -C "${repo_root}" cat-file -e "${base_commit}^{commit}"
 git -C "${repo_root}" apply --reverse --check "${sdcc_combined_patch}"
-# Keep this check scoped to the authoritative tracked inputs.  An unscoped
-# submodule diff asks Git to inspect the partial LLVM worktrees and can trigger
-# a promisor fetch even though their exact patches are verified below.
+# Keep whitespace checks scoped to project-owned production inputs.
+# Vendored upstream fixtures retain their exact bytes and are hashed below.
 git -C "${repo_root}" diff --check -- \
   Makefile.in \
   arduino \
@@ -462,14 +462,11 @@ for script in "${repo_root}"/arduino/scripts/*.sh; do
   bash -n "${script}"
 done
 
-llvm_commit=$(git -C "${repo_root}/toolchain/llvm-project" rev-parse HEAD)
-test "${llvm_commit}" = 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
-cbe_commit=$(git -C "${repo_root}/toolchain/llvm-cbe" rev-parse HEAD)
-test "${cbe_commit}" = 83f1bea66c7415c701925470a2f7596b37153197
-git -C "${repo_root}/toolchain/llvm-project" apply --reverse --check \
-  --directory=clang "${clang_patch}"
-git -C "${repo_root}/toolchain/llvm-cbe" apply --reverse --check \
-  "${cbe_patch}"
+python3 "${script_dir}/vendor_sources.py" --root "${repo_root}"
+git -C "${repo_root}" apply --reverse --check \
+  --directory=toolchain/llvm-project/clang "${clang_patch}"
+git -C "${repo_root}" apply --reverse --check \
+  --directory=toolchain/llvm-cbe "${cbe_patch}"
 echo "SDCC_BASE_COMMIT=${base_commit}"
 echo "SDCC_PATCHED_GEN_BLOB=${patched_blob}"
 echo "SDCC_PATCHED_GEN_LOWER_BLOB=${patched_lower_blob}"
@@ -477,7 +474,5 @@ echo "SDCC_PATCHED_PEEPH_BLOB=${patched_peeph_blob}"
 echo "SDCC_PATCHED_LRANGE_BLOB=${patched_lrange_blob}"
 echo "SDCC_PATCHED_LKMAIN_BLOB=${lkmain_blob}"
 echo "SDCC_PATCHED_LKMEM_BLOB=${lkmem_blob}"
-echo "LLVM_PROJECT_COMMIT=${llvm_commit}"
-echo "LLVM_CBE_COMMIT=${cbe_commit}"
 check_sha 34dc1a1a8ff0908c6dba0932ca08962f04d9135958dfd3869256da4177b003c8 "${repo_root}/arduino/bridge/native-storage.py"
 echo "SOURCE_LOCKS=PASS"

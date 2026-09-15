@@ -36,9 +36,9 @@
       "build_script": "arduino/scripts/build-wsl.sh",
       "build_script_sha256": "d89d1a430676e178979310c856f7e331a6c18bb2f640d4afa9bef2810ba8aa50",
       "prepare_script": "arduino/scripts/prepare-sources-wsl.sh",
-      "prepare_script_sha256": "8275666403caacf3f801f2ad184fc09f0b01cb86540c14ca156702e66f78a868",
+      "prepare_script_sha256": "f5ef46e92a1118224cacfe08d69b4a0e4a95d97ed5bc2677361b5c1cebcab710",
       "source_check_script": "arduino/scripts/check-sources-wsl.sh",
-      "source_check_script_sha256": "b032d5ae19adbb7c2c8db3fc2a0516af8214e1e42c46ffd3114f8b584478b471"
+      "source_check_script_sha256": "0a00e2ec9621fa7fcce46bae360bcbf64beafc850bff5b5e2154561858a29c11"
     }
   },
   "llvm_cbe": {
@@ -659,5 +659,12 @@
       "member_call_program_address_space": 1
     }
   },
-  "verification_scope": "Source, patch and tool identity checks; restored upstream and dedicated audit fixtures included. Simulator evidence is not physical-board qualification."
+  "verification_scope": "Source, patch and tool identity checks; restored upstream and dedicated audit fixtures included. Simulator evidence is not physical-board qualification.",
+  "vendored_sources": {
+    "manifest": "toolchain/source-manifest.json",
+    "manifest_sha256": "b66206f5762fd33262266da37cfcc314db15b8b4bd9261f28c99fc3cd256a656",
+    "helper": "arduino/scripts/vendor_sources.py",
+    "helper_sha256": "ac328da4cfa8fceef8b3136ee64bf3b809d9ef2e334c95d7053165588d7ab738",
+    "state": "STC patches applied; ordinary files in the STCXX repository"
+  }
 }
