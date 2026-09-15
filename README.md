@@ -4,7 +4,7 @@ STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目
 
 C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链接成功只说明工具链完成了对应处理；具体芯片的启动、外设和烧录行为需要分别验证。
 
-当前配套 arduino-stc51 的生产发布工作仅面向 Windows 和 macOS。WSL 工具保留为 Windows C++ 的必要依赖，Linux 独立宿主不纳入本次适配和验收；详见[发布宿主范围](../arduino-stc51/docs/release-host-scope.md)。
+当前配套 arduino-stc51 的生产发布工作仅面向 Windows 和 macOS。WSL 工具保留为 Windows C++ 的必要依赖，Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-stc51/README.md)。
 
 ## 项目分工
 
