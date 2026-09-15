@@ -132,6 +132,8 @@ true_store_wr4 (void) __naked
         mov     @spx-0x003f,a
         mov     a,r4
         mov     @spx-0x0040,a
+        xrl     a,#0x5a
+        mov     dpl,a
         eret
     __endasm;
 }

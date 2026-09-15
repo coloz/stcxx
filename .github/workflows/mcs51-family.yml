@@ -76,6 +76,11 @@ jobs:
             --disable-ucsim \
             --disable-sdcdb
 
+      - name: Check bridge and release evidence regressions
+        run: |
+          python3 -m unittest discover -s arduino/bridge -p 'test_*.py' -v
+          python3 -m unittest discover -s arduino/scripts -p 'test_*.py' -v
+
       - name: Build SDCC
         run: make -C sdcc-build -j"$(nproc)"
 

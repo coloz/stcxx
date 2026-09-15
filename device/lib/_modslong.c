@@ -258,9 +258,11 @@ not_negative:
 long
 _modslong (long a, long b) __SDCC_NONBANKED
 {
-  long r;
+  unsigned long r;
 
-  r = (unsigned long)(a < 0 ? -a : a) % (unsigned long)(b < 0 ? -b : b);
+  /* Avoid signed negation overflow for LONG_MIN. */
+  r = (a < 0 ? 0UL - (unsigned long)a : (unsigned long)a) %
+      (b < 0 ? 0UL - (unsigned long)b : (unsigned long)b);
 
   if (a < 0)
     return -r;

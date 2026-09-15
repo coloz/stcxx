@@ -1,5 +1,5 @@
 diff --git a/Makefile.in b/Makefile.in
-index c1bf8dcc2..ee6cc46fa 100644
+index c1bf8dcc2d068872c08865bc1c28236784fee839..ee6cc46fa74cb74be4de4f73042e239a0681a95f 100644
 --- a/Makefile.in
 +++ b/Makefile.in
 @@ -17,8 +17,7 @@ SDCC_LIBS       = support/makebin
@@ -22,7 +22,7 @@ index c1bf8dcc2..ee6cc46fa 100644
  
  ifneq ($(OPT_DISABLE_Z80)$(OPT_DISABLE_Z180)$(OPT_DISABLE_Z80N)$(OPT_DISABLE_R800), 1111)
 diff --git a/configure b/configure
-index c618dd7c8..6b1538adf 100755
+index c618dd7c8ae455715f369505d47b6f0ed8b6dda7..6b1538adfa806e99be39f90aaeefdc124a7b0bc8 100755
 --- a/configure
 +++ b/configure
 @@ -8939,7 +8939,7 @@ test $OPT_DISABLE_DEVICE_LIB = 0 && ac_config_files="$ac_config_files device/lib
@@ -55,7 +55,7 @@ index c618dd7c8..6b1538adf 100755
  # End of configure/configure.in
 -
 diff --git a/configure.ac b/configure.ac
-index f254e52aa..ffdc0025d 100644
+index f254e52aa6f1fe5dceafa75a24747593d72e774b..ffdc0025da10fc9cbab5aced7090c92043820d41 100644
 --- a/configure.ac
 +++ b/configure.ac
 @@ -941,11 +941,8 @@ src/Makefile
@@ -70,8 +70,101 @@ index f254e52aa..ffdc0025d 100644
  Makefile
  Makefile.common:Makefile.common.in
  ])
+diff --git a/device/lib/Makefile.in b/device/lib/Makefile.in
+index 23d184dbee12c6b95bf931a6a7e35d84f32e35c5..26bfcc08a1ab2f956bedaefef9e63d5d5866f40c 100644
+--- a/device/lib/Makefile.in
++++ b/device/lib/Makefile.in
+@@ -159,6 +159,10 @@ SOURCES_SDCC = $(COMMON_SDCC) \
+   printfl.c \
+   bpx.c
+ 
++ifneq ($(filter mcs251-%,$(PORT)),)
++SOURCES_SDCC += _heap_init.c
++endif
++
+ SOURCES = $(SOURCES_FLOAT) $(SOURCES_INT) $(SOURCES_LONG) $(SOURCES_LONGLONG) $(SOURCES_SDCC)
+ 
+ OBJECTS_FLOAT = $(SOURCES_FLOAT:%.c=$(PORT)/%.rel)
+@@ -330,6 +334,10 @@ ifneq ($(TARGETS), )
+ 	$(MAKE) $(TARGETS)
+ endif
+ 
++ifneq ($(filter mcs251-%,$(PORT)),)
++$(PORT)/malloc.rel $(PORT)/_heap_init.rel: $(srcdir)/mcs251/heap.h
++endif
++
+ objects:
+ 	$(MAKE) build-dir
+ 	$(MAKE) $(OBJECTS)
+diff --git a/device/lib/_divsint.c b/device/lib/_divsint.c
+index 1561cca676da56e8fec38e061444b103d3b7049f..cba37d57dfb0cee1df8f38af6d0817fa60a0e867 100644
+--- a/device/lib/_divsint.c
++++ b/device/lib/_divsint.c
+@@ -206,9 +206,10 @@ not_negative:
+ int
+ _divsint (int x, int y) __SDCC_NONBANKED
+ {
+-  register int r;
++  register unsigned int r;
+ 
+-  r = (unsigned int)(x < 0 ? -x : x) / (unsigned int)(y < 0 ? -y : y);
++  r = (x < 0 ? 0u - (unsigned int)x : (unsigned int)x) /
++      (y < 0 ? 0u - (unsigned int)y : (unsigned int)y);
+   if ((x < 0) ^ (y < 0))
+     return -r;
+   else
+diff --git a/device/lib/_divslong.c b/device/lib/_divslong.c
+index c3d48f9e68b48e4f868e4912712135b272910874..33d1b6018a54bc766ab2185d0a389557b0ef64aa 100644
+--- a/device/lib/_divslong.c
++++ b/device/lib/_divslong.c
+@@ -258,9 +258,11 @@ not_negative:
+ long
+ _divslong (long x, long y) __SDCC_NONBANKED
+ {
+-  long r;
++  unsigned long r;
+ 
+-  r = (unsigned long)(x < 0 ? -x : x) / (unsigned long)(y < 0 ? -y : y);
++  /* The magnitude of LONG_MIN is representable only in unsigned long. */
++  r = (x < 0 ? 0UL - (unsigned long)x : (unsigned long)x) /
++      (y < 0 ? 0UL - (unsigned long)y : (unsigned long)y);
+   if ((x < 0) ^ (y < 0))
+     return -r;
+   else
+diff --git a/device/lib/_divslonglong.c b/device/lib/_divslonglong.c
+index 8785e8747949474561656beb8fc83bca0c48520b..9eb146c49ad5328c7d7bbd135e7408128f56590f 100644
+--- a/device/lib/_divslonglong.c
++++ b/device/lib/_divslonglong.c
+@@ -27,6 +27,7 @@
+ -------------------------------------------------------------------------*/
+ 
+ #include <stdint.h>
++#include <limits.h>
+ #include <stdbool.h>
+ 
+ #include <sdcc-lib.h>
+@@ -39,14 +40,15 @@ _divslonglong (long long numerator, long long denominator) __SDCC_NONBANKED
+   bool denominatorneg = (denominator < 0);
+   long long d;
+ 
+-  if (numeratorneg)
++  /* LLONG_MIN already has the desired unsigned magnitude bit pattern.
++     Guard it explicitly to avoid signed overflow without extra 64-bit RAM. */
++  if (numeratorneg && numerator != LLONG_MIN)
+     numerator = -numerator;
+-  if (denominatorneg)
++  if (denominatorneg && denominator != LLONG_MIN)
+     denominator = -denominator;
+ 
+   d = (unsigned long long)numerator / (unsigned long long)denominator;
+ 
+-  return ((numeratorneg ^ denominatorneg) ? -d : d);
++  return (((numeratorneg ^ denominatorneg) && d != LLONG_MIN) ? -d : d);
+ }
+ #endif
+-
 diff --git a/device/lib/_heap.c b/device/lib/_heap.c
-index be0ca399b..a5f6f9423 100644
+index be0ca399be07bea65d58f20b5f243b2022a1bea3..a5f6f9423e499ea0496525457d4d8f55fab004de 100644
 --- a/device/lib/_heap.c
 +++ b/device/lib/_heap.c
 @@ -37,5 +37,10 @@
@@ -86,11 +179,179 @@ index be0ca399b..a5f6f9423 100644
  const unsigned int __sdcc_heap_size = HEAP_SIZE;
 -
 +#endif
+diff --git a/device/lib/_heap_init.c b/device/lib/_heap_init.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..0dd3c49a5fc1cc6171d3c8a2033d554d6b89b83b
+--- /dev/null
++++ b/device/lib/_heap_init.c
+@@ -0,0 +1,48 @@
++/*-------------------------------------------------------------------------
++   _heap_init.c - MCS251 heap initialization and allocator state.
++
++   Extracted from malloc.c, Copyright (C) 2015, Philipp Klaus Krause,
++   pkk@spth.de.
++
++   This library is free software; you can redistribute it and/or modify it
++   under the terms of the GNU General Public License as published by the
++   Free Software Foundation; either version 2, or (at your option) any
++   later version.
++
++   This library is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this library; see the file COPYING. If not, write to the
++   Free Software Foundation, 51 Franklin Street, Fifth Floor, Boston,
++   MA 02110-1301, USA.
++
++   As a special exception, if you link this library with other files,
++   some of which are compiled with SDCC, to produce an executable,
++   this library does not by itself cause the resulting executable to
++   be covered by the GNU General Public License. This exception does
++   not however invalidate any other reasons why the executable file
++   might be covered by the GNU General Public License.
++-------------------------------------------------------------------------*/
++
++#if defined(__SDCC_mcs251)
++#include "mcs251/heap.h"
++
++extern header_t __sdcc_heap;
++extern const size_t __sdcc_heap_size32;
++#define HEAP_START &__sdcc_heap
++#define HEAP_END (struct header HEAPSPACE *)((char HEAPSPACE *)&__sdcc_heap + (__sdcc_heap_size32 - 1))
++
++header_t *HEAPSPACE __sdcc_heap_free;
++unsigned char __sdcc_heap_initialized;
++
++void __sdcc_heap_init(void)
++{
++    __sdcc_heap_free = HEAP_START;
++    __sdcc_heap_free->next = HEAP_END;
++    __sdcc_heap_free->next_free = 0;
++    __sdcc_heap_initialized = 1;
++}
++#endif
+diff --git a/device/lib/_modsint.c b/device/lib/_modsint.c
+index cffc77d7d410dae9854a0261d69fc44be9166f40..71ea8604b4d91ed8662b388ec1de6d666b020666 100644
+--- a/device/lib/_modsint.c
++++ b/device/lib/_modsint.c
+@@ -202,9 +202,10 @@ not_negative:
+ 
+ int _modsint (int a, int b) __SDCC_NONBANKED
+ {
+-  register int r;
++  register unsigned int r;
+ 
+-  r = (unsigned)(a < 0 ? -a : a) % (unsigned)(b < 0 ? -b : b);
++  r = (a < 0 ? 0u - (unsigned int)a : (unsigned int)a) %
++      (b < 0 ? 0u - (unsigned int)b : (unsigned int)b);
+ 
+   if (a < 0)
+     return -r;
+diff --git a/device/lib/_modslong.c b/device/lib/_modslong.c
+index 4dbfd6571de6456dc16012d71be2ef5a33b746e0..c543267976b60eb622e5c67d79c58f42bcce664e 100644
+--- a/device/lib/_modslong.c
++++ b/device/lib/_modslong.c
+@@ -258,9 +258,11 @@ not_negative:
+ long
+ _modslong (long a, long b) __SDCC_NONBANKED
+ {
+-  long r;
++  unsigned long r;
+ 
+-  r = (unsigned long)(a < 0 ? -a : a) % (unsigned long)(b < 0 ? -b : b);
++  /* Avoid signed negation overflow for LONG_MIN. */
++  r = (a < 0 ? 0UL - (unsigned long)a : (unsigned long)a) %
++      (b < 0 ? 0UL - (unsigned long)b : (unsigned long)b);
+ 
+   if (a < 0)
+     return -r;
+diff --git a/device/lib/_modslonglong.c b/device/lib/_modslonglong.c
+index 33b643fdb61552b0ed6538287926640daca667c3..b86ce6bc3ecce7c9bdba2ac12b546e6718e84388 100644
+--- a/device/lib/_modslonglong.c
++++ b/device/lib/_modslonglong.c
+@@ -27,6 +27,7 @@
+ -------------------------------------------------------------------------*/
+ 
+ #include <stdint.h>
++#include <limits.h>
+ #include <stdbool.h>
+ 
+ #include <sdcc-lib.h>
+@@ -39,14 +40,14 @@ _modslonglong (long long numerator, long long denominator) __SDCC_NONBANKED
+   bool denominatorneg = (denominator < 0);
+   long long r;
+ 
+-  if (numeratorneg)
++  /* Preserve LLONG_MIN's unsigned magnitude without negating it. */
++  if (numeratorneg && numerator != LLONG_MIN)
+     numerator = -numerator;
+-  if (denominatorneg)
++  if (denominatorneg && denominator != LLONG_MIN)
+     denominator = -denominator;
+ 
+   r = (unsigned long long)numerator % (unsigned long long)denominator;
+ 
+-  return (numeratorneg ? -r : r);
++  return ((numeratorneg && r != LLONG_MIN) ? -r : r);
+ }
+ #endif
+-
+diff --git a/device/lib/_mullong.c b/device/lib/_mullong.c
+index 1a16ea7d1ece144a36a09e04d3ee8ed32c7a2281..789fa5c1822eded79e1cbee66b3cf22cb2a7d5df 100644
+--- a/device/lib/_mullong.c
++++ b/device/lib/_mullong.c
+@@ -701,6 +701,25 @@ _mullong (long a, long b)
+ 
+         return t.l;
+ }
++#elif defined(__SDCC_mcs251) && (defined(__SDCC_STACK_AUTO) || defined(__SDCC_MODEL_LARGE))
++/* The native unsigned word multiply produces all 32 product bits.  For
++   a = a_hi*2^16 + a_lo and b = b_hi*2^16 + b_lo, a_hi*b_hi vanishes
++   modulo 2^32.  Keep the remaining arithmetic unsigned, including the
++   shift, so signed operands have the same low product bits without C
++   signed overflow.  The small, non-stack-auto byte implementation below
++   is already smaller; retain it for that memory model. */
++long
++_mullong (long a, long b) __SDCC_NONBANKED
++{
++  unsigned short a_lo = (unsigned short)a;
++  unsigned short b_lo = (unsigned short)b;
++  unsigned short a_hi = (unsigned short)((unsigned long)a >> 16);
++  unsigned short b_hi = (unsigned short)((unsigned long)b >> 16);
++  unsigned long low = (unsigned long)a_lo * b_lo;
++  unsigned long cross = (unsigned long)a_hi * b_lo;
++  cross += (unsigned long)b_hi * a_lo;
++  return low + (cross << 16);
++}
+ #elif defined(__SDCC_z80) || defined(__SDCC_sm83) || defined(__SDCC_r2ka) || defined(__SDCC_r3k) || defined(__SDCC_r3ka) || defined(__SDCC_r4k) || defined(__SDCC_r5k) || defined(__SDCC_r6k) || defined(__SDCC_r800)
+ /* 32x32->32 multiplication to be used
+    if 16x16->16 is faster than three 8x8->16.
+@@ -763,4 +782,3 @@ _mullong (long a, long b) __SDCC_NONBANKED
+ #endif
+ 
+ #endif // _MULLONG_ASM
+-
 diff --git a/device/lib/malloc.c b/device/lib/malloc.c
-index 588a1eeee..fd17c3886 100644
+index 588a1eeee50440d91d474fa37b4edc06ec91deb2..bc6f24625f7ed0959bef5c2fa18b056cbaaf786f 100644
 --- a/device/lib/malloc.c
 +++ b/device/lib/malloc.c
-@@ -46,13 +46,24 @@ struct header
+@@ -29,6 +29,12 @@
+ #include <stdlib.h>
+ #include <stddef.h>
+ 
++#if defined(__SDCC_mcs251)
++/* Initialization and its state have a separate archive member, so a startup
++   heap snapshot need not pull in the allocation algorithm. */
++#include "mcs251/heap.h"
++#else
++
+ #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400)
+ #define HEAPSPACE __xdata
+ #elif defined(__SDCC_pdk13) || defined(__SDCC_pdk14) || defined(__SDCC_pdk15)
+@@ -46,13 +52,24 @@ struct header
  };
  
  header_t *HEAPSPACE __sdcc_heap_free; // First free block, 0 if no free blocks.
@@ -115,7 +376,7 @@ index 588a1eeee..fd17c3886 100644
  #define HEAP_END (struct header HEAPSPACE *)((char HEAPSPACE *)&__sdcc_heap + (__sdcc_heap_size - 1)) // -1 To be sure that HEAP_END is bigger than HEAP_START.
  
  #else
-@@ -67,6 +78,9 @@ void __sdcc_heap_init(void)
+@@ -67,8 +84,13 @@ void __sdcc_heap_init(void)
  	__sdcc_heap_free = HEAP_START;
  	__sdcc_heap_free->next = HEAP_END;
  	__sdcc_heap_free->next_free = 0;
@@ -124,8 +385,12 @@ index 588a1eeee..fd17c3886 100644
 +#endif
  }
  
++#endif /* MCS251 initialization/state are provided by _heap_init.c. */
++
  #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400)
-@@ -78,7 +92,10 @@ void *malloc(size_t size)
+ void HEAPSPACE *malloc(size_t size)
+ #else
+@@ -78,7 +100,10 @@ void *malloc(size_t size)
  	header_t *h;
  	header_t *HEAPSPACE *f;
  
@@ -138,7 +403,7 @@ index 588a1eeee..fd17c3886 100644
  		__sdcc_heap_init();
  #endif
 diff --git a/device/lib/mcs251/Makefile.in b/device/lib/mcs251/Makefile.in
-index 628d46b20..12ee44afb 100644
+index 628d46b202dcd4f983d74316f448068c34ab7bf8..12ee44afb7a42c6c1c46cf3936b3ab80215c80df 100644
 --- a/device/lib/mcs251/Makefile.in
 +++ b/device/lib/mcs251/Makefile.in
 @@ -43,7 +43,7 @@ endif
@@ -159,8 +424,40 @@ index 628d46b20..12ee44afb 100644
  
  clean:
  	rm -f $(MCS51_GENERATED_ASM) *.rel *.sym *.lst *~ *.lib
+diff --git a/device/lib/mcs251/heap.h b/device/lib/mcs251/heap.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..570a7f5650147f8b101157ee2b4ec02b8a7be274
+--- /dev/null
++++ b/device/lib/mcs251/heap.h
+@@ -0,0 +1,26 @@
++/* Private MCS251 allocator ABI, shared by malloc and heap initialization.
++ * The free/realloc implementations use the same two-pointer header layout.
++ * SPDX-License-Identifier: GPL-2.0-or-later WITH SDCC-exception-2.0
++ */
++#ifndef SDCC_MCS251_HEAP_H
++#define SDCC_MCS251_HEAP_H
++
++#include <stddef.h>
++#define HEAPSPACE __xdata
++typedef struct header HEAPSPACE header_t;
++struct header
++{
++    header_t *next;
++    header_t *next_free;
++};
++
++typedef char __sdcc_heap_pointer_width[sizeof(header_t *) == 3 ? 1 : -1];
++typedef char __sdcc_heap_header_width[sizeof(struct header) == 6 ? 1 : -1];
++typedef char __sdcc_heap_payload_offset[offsetof(struct header, next_free) == 3 ? 1 : -1];
++
++extern header_t *HEAPSPACE __sdcc_heap_free;
++/* A null free-list head may denote exhaustion; it is not an init flag. */
++extern unsigned char __sdcc_heap_initialized;
++void __sdcc_heap_init(void);
++
++#endif
 diff --git a/device/lib/printf_large.c b/device/lib/printf_large.c
-index 174f70c6f..25aa5b6e6 100644
+index 174f70c6f929eb7b0eb24ba0ab3f874791d97345..25aa5b6e6856d0ef9b51fe9b2ba217066f244fa8 100644
 --- a/device/lib/printf_large.c
 +++ b/device/lib/printf_large.c
 @@ -654,6 +654,12 @@ get_conversion_spec:
@@ -177,7 +474,7 @@ index 174f70c6f..25aa5b6e6 100644
          OUTPUT_CHAR('0', p);
          OUTPUT_CHAR('x', p);
 diff --git a/device/lib/realloc.c b/device/lib/realloc.c
-index cc6606cc1..a11359ab3 100644
+index cc6606cc1cd2ea8ce4977aafaaccf4ecb9b7e98e..a11359ab357008f551701758e32a38e75d18b306 100644
 --- a/device/lib/realloc.c
 +++ b/device/lib/realloc.c
 @@ -51,6 +51,9 @@ struct header
@@ -203,7 +500,7 @@ index cc6606cc1..a11359ab3 100644
  		__sdcc_heap_init();
  #endif
 diff --git a/sdas/as251/Makefile.in b/sdas/as251/Makefile.in
-index 0d8c12528..cbeb57664 100644
+index 0d8c1252875d97e24fd48bad7db3526be17a774f..cbeb576649cabfa235753a813b2d648178ea9a0e 100644
 --- a/sdas/as251/Makefile.in
 +++ b/sdas/as251/Makefile.in
 @@ -13,6 +13,7 @@ CPP             = @CPP@
@@ -236,7 +533,7 @@ index 0d8c12528..cbeb57664 100644
  
  # Performing installation test
 diff --git a/sdas/as251/mcs251adr.c b/sdas/as251/mcs251adr.c
-index d3cecfc3e..cfca80fb5 100644
+index d3cecfc3e882a3eee86f6bdc33755ce128f10ecb..cfca80fb5eea7ec8448161f7268a36208ad3e42d 100644
 --- a/sdas/as251/mcs251adr.c
 +++ b/sdas/as251/mcs251adr.c
 @@ -190,8 +190,12 @@ addr(struct expr *esp)
@@ -255,7 +552,7 @@ index d3cecfc3e..cfca80fb5 100644
  	else if (c == '*') {
  		if ((c = getnb()) == '/') {
 diff --git a/sdas/as251/mcs251mch.c b/sdas/as251/mcs251mch.c
-index ec0d7f23d..6887d35c9 100644
+index ec0d7f23d33d9f008bd85e82044d966d1bd66fc7..6887d35c9a9fef68d1b89829bb3288229411600f 100644
 --- a/sdas/as251/mcs251mch.c
 +++ b/sdas/as251/mcs251mch.c
 @@ -128,8 +128,10 @@ out_displacement(struct expr *esp)
@@ -325,7 +622,7 @@ index ec0d7f23d..6887d35c9 100644
  						outab((dst << 4) | (v1 << 2));
 diff --git a/sdas/as251/tests/README.md b/sdas/as251/tests/README.md
 new file mode 100644
-index 000000000..d154a9d02
+index 0000000000000000000000000000000000000000..d154a9d0291684cffec2c725889800cdb3794de8
 --- /dev/null
 +++ b/sdas/as251/tests/README.md
 @@ -0,0 +1,51 @@
@@ -382,7 +679,7 @@ index 000000000..d154a9d02
 +same candidate toolchain. Do not mix new object records with an older linker.
 diff --git a/sdas/as251/tests/check-audit.py b/sdas/as251/tests/check-audit.py
 new file mode 100644
-index 000000000..e3d0e6513
+index 0000000000000000000000000000000000000000..e3d0e65132be16d9ce887185cd8e665e9a4e02fc
 --- /dev/null
 +++ b/sdas/as251/tests/check-audit.py
 @@ -0,0 +1,304 @@
@@ -691,7 +988,7 @@ index 000000000..e3d0e6513
 +if __name__ == '__main__':
 +    main()
 diff --git a/sdas/asxxsrc/asmain.c b/sdas/asxxsrc/asmain.c
-index 40720e795..7a7398471 100644
+index 40720e79553f8a5cd5a1db2febbee4a9561a054d..7a73984719e558b91a80a1fabc0559cec31e3cfa 100644
 --- a/sdas/asxxsrc/asmain.c
 +++ b/sdas/asxxsrc/asmain.c
 @@ -2920,7 +2920,8 @@ newdot(struct area *nap)
@@ -720,7 +1017,7 @@ index 40720e795..7a7398471 100644
  }
 -
 diff --git a/sdas/asxxsrc/asout.c b/sdas/asxxsrc/asout.c
-index 2b39f5ee3..90c9ed86d 100644
+index 2b39f5ee31784d124769511003fea71355061fe2..90c9ed86de98d0a7920401365867b15d34ce45a3 100644
 --- a/sdas/asxxsrc/asout.c
 +++ b/sdas/asxxsrc/asout.c
 @@ -612,9 +612,22 @@ outrxb(int i, struct expr *esp, int r)
@@ -803,7 +1100,7 @@ index 2b39f5ee3..90c9ed86d 100644
  					*relp++ = r;
  					*relp++ = txtp - txt - 3;
 diff --git a/sdas/asxxsrc/asxxxx.h b/sdas/asxxsrc/asxxxx.h
-index 076b5607d..0ba69f0f0 100644
+index 076b5607d51ee974cc4fd7dc1a6b2710418f2668..0ba69f0f085331a6ae4c304e5fa45b76c2a1722d 100644
 --- a/sdas/asxxsrc/asxxxx.h
 +++ b/sdas/asxxsrc/asxxxx.h
 @@ -389,6 +389,8 @@ struct	area
@@ -816,7 +1113,7 @@ index 076b5607d..0ba69f0f0 100644
  
  #define IS_R_J19(x)     (((x) & R_J19_MASK) == R_J19)
 diff --git a/sdas/linksrc/Makefile.in b/sdas/linksrc/Makefile.in
-index aa255f9b6..f1370f1cd 100644
+index aa255f9b6273c0ce5b9c277b0d604e7137839d14..f1370f1cd9b0b47851c3ac0cbc1b433f8ed637bc 100644
 --- a/sdas/linksrc/Makefile.in
 +++ b/sdas/linksrc/Makefile.in
 @@ -63,10 +63,12 @@ transform       = @program_transform_name@
@@ -864,7 +1161,7 @@ index aa255f9b6..f1370f1cd 100644
  	  rm -f $(DESTDIR)$(bindir)/`echo \`basename $$ld\` | sed '$(transform)'`$(EXEEXT); \
  	done
 diff --git a/sdas/linksrc/aslink.h b/sdas/linksrc/aslink.h
-index 0a41abb21..ac34eacbf 100644
+index 0a41abb21b0502078cb9812d46e795719ffbfd9b..ac34eacbf1f23af972304a29c39d14d3ac50bea2 100644
 --- a/sdas/linksrc/aslink.h
 +++ b/sdas/linksrc/aslink.h
 @@ -365,6 +365,8 @@ extern	int	ASxxxx_VERSION;
@@ -905,7 +1202,7 @@ index 0a41abb21..ac34eacbf 100644
  
  /* lkbank.c */
 diff --git a/sdas/linksrc/lkarea.c b/sdas/linksrc/lkarea.c
-index 75f6004ee..354b8affa 100644
+index 75f6004eec75d5a75aa98505587b03a9701367a3..354b8affaed80bf2adb3c2c1215a0982396eed9a 100644
 --- a/sdas/linksrc/lkarea.c
 +++ b/sdas/linksrc/lkarea.c
 @@ -147,8 +147,17 @@ newarea(void)
@@ -1339,7 +1636,7 @@ index 75f6004ee..354b8affa 100644
  /* end sdld specific */
 -
 diff --git a/sdas/linksrc/lkdata.c b/sdas/linksrc/lkdata.c
-index 758824a44..b7a42b6de 100644
+index 758824a444580a5ad1290325b176c3bf510ca7fa..b7a42b6dec36d090795ec48585ecb8177caeeb99 100644
 --- a/sdas/linksrc/lkdata.c
 +++ b/sdas/linksrc/lkdata.c
 @@ -179,6 +179,9 @@ long    xram_size = -1; /*      external ram size
@@ -1362,7 +1659,7 @@ index 758824a44..b7a42b6de 100644
  
  /*
 diff --git a/sdas/linksrc/lkmain.c b/sdas/linksrc/lkmain.c
-index 0a7e1f4d2..801cf817f 100644
+index 0a7e1f4d2489035091fa949694d2b5ae1d6db439..801cf817f23c7c3e5c49ba6bb6813847c76da7ed 100644
 --- a/sdas/linksrc/lkmain.c
 +++ b/sdas/linksrc/lkmain.c
 @@ -23,6 +23,45 @@
@@ -1502,7 +1799,7 @@ index 0a7e1f4d2..801cf817f 100644
          "  -S   [stack-size] Allocate space for stack",
  	"End:",
 diff --git a/sdas/linksrc/lkmem.c b/sdas/linksrc/lkmem.c
-index a4bb3b91b..fcb4cabe3 100644
+index a4bb3b91babd09852242165e8d1cde8f9bbb3300..fcb4cabe3a0a41074176e82daed4973b31b6fc0b 100644
 --- a/sdas/linksrc/lkmem.c
 +++ b/sdas/linksrc/lkmem.c
 @@ -502,6 +502,9 @@ int summary2(struct area * areap)
@@ -1584,7 +1881,7 @@ index a4bb3b91b..fcb4cabe3 100644
  }
 -
 diff --git a/sdas/linksrc/lkrloc3.c b/sdas/linksrc/lkrloc3.c
-index cd5858c55..68c5b11d3 100644
+index cd5858c5518d9aec3e2d1e61cbb3c43aa312f5fe..68c5b11d3b27f264c31d97b48ca71ebf22b2bc8a 100644
 --- a/sdas/linksrc/lkrloc3.c
 +++ b/sdas/linksrc/lkrloc3.c
 @@ -566,7 +566,12 @@ relr3(void)
@@ -1682,7 +1979,7 @@ index cd5858c55..68c5b11d3 100644
  };
  
 diff --git a/sdas/linksrc/sdld.c b/sdas/linksrc/sdld.c
-index 123bd9a8a..b2b881259 100644
+index 123bd9a8aaa6a4df602c6223fa0acc513fabf279..b2b88125933af4fa0d78c7534eec0fa1fbae40e1 100644
 --- a/sdas/linksrc/sdld.c
 +++ b/sdas/linksrc/sdld.c
 @@ -73,6 +73,7 @@ sdld_init (char *path)
@@ -1701,7 +1998,7 @@ index 123bd9a8a..b2b881259 100644
 +  return target == TARGET_ID_8051 || target == TARGET_ID_MCS251;
  }
 diff --git a/sdas/linksrc/sdld.h b/sdas/linksrc/sdld.h
-index e2ddfcf55..12bf896a0 100644
+index e2ddfcf5535ba0dfc246195e13e72ca91b204fce..12bf896a08e8aaddb506c5b29924150b991462d6 100644
 --- a/sdas/linksrc/sdld.h
 +++ b/sdas/linksrc/sdld.h
 @@ -24,6 +24,7 @@ enum sdld_target_e {
@@ -1723,7 +2020,7 @@ index e2ddfcf55..12bf896a0 100644
  #define TARGET_IS_STM8  (get_sdld_target() == TARGET_ID_STM8)
  #define TARGET_IS_PDK                      \
 diff --git a/src/SDCCast.c b/src/SDCCast.c
-index db8b92ea6..6ccb869b0 100644
+index db8b92ea60af7507c4b2e021e147c6d490f9a002..6ccb869b0ec48c9041299dc2c88ae69e61a43756 100644
 --- a/src/SDCCast.c
 +++ b/src/SDCCast.c
 @@ -4482,7 +4482,14 @@ decorateType (ast *tree, RESULT_TYPE resultType, bool reduceTypeAllowed)
@@ -1741,8 +2038,52 @@ index db8b92ea6..6ccb869b0 100644
          }
  
        if (!tree->initMode && IS_REGISTER (TETYPE (tree)))
+diff --git a/src/SDCCbtree.cc b/src/SDCCbtree.cc
+index 298bd5722c25e3c0efdbab26fda7a8c062af1bbc..b4591f49bf63b7ffaa32a5abf87d0b0637b7bcc3 100644
+--- a/src/SDCCbtree.cc
++++ b/src/SDCCbtree.cc
+@@ -109,6 +109,34 @@ void btree_add_symbol(struct symbol *s)
+   wassert(s);
+   block = s->_isparm ? 0 : s->block; // This is essentially a workaround. TODO: Ensure that the parameter block is placed correctly in the btree instead!
+ 
++  /* Inlining and copy propagation can keep a local's value alive outside
++     its lexical block (notably several inline return values in one full
++     expression). Sibling block slots may only overlap after all such uses
++     have finished. Lift the allocation to the common ancestor of the final
++     iCode definitions/uses, without changing the symbol's lexical scope. */
++  if (!s->_isparm && (TARGET_IS_MCS51 || TARGET_IS_MCS251))
++    {
++      std::list<symbol *> occupants;
++      occupants.push_back (s);
++      int livekey;
++      for (symbol *temp = (symbol *)hTabFirstItem (liveRanges, &livekey); temp;
++           temp = (symbol *)hTabNextItem (liveRanges, &livekey))
++        if (temp->usl.spillLoc == s || temp->prereqv == s)
++          occupants.push_back (temp);
++      for (symbol *value : occupants)
++        {
++          const int count = std::max (value->uses ? value->uses->size : 0,
++                                     value->defs ? value->defs->size : 0);
++          for (int key = 0; key < count; ++key)
++            if (bitVectBitValue (value->uses, key) || bitVectBitValue (value->defs, key))
++              {
++                iCode *ic = (iCode *)hTabItemWithKey (iCodehTab, key);
++                if (ic && bmap.find (ic->block) != bmap.end ())
++                  block = btree_lowest_common_ancestor (block, ic->block);
++              }
++        }
++    }
++
+ #ifdef BTREE_DEBUG
+   std::cout << "Adding symbol " << s->name << " at " << block << "\n";
+ #endif
+@@ -174,4 +202,3 @@ void btree_alloc(void)
+       SPEC_STAK (currFunc->etype) += ssize;
+     }
+ }
+-
 diff --git a/src/SDCCglobl.h b/src/SDCCglobl.h
-index 6c54f626c..e7531b7eb 100644
+index 6c54f626c08773aaba76e60b72f66df865ca6ac7..e7531b7eb1478450367472c5cc4f45bf25fa9156 100644
 --- a/src/SDCCglobl.h
 +++ b/src/SDCCglobl.h
 @@ -303,6 +303,8 @@ struct options
@@ -1755,7 +2096,7 @@ index 6c54f626c..e7531b7eb 100644
      int noXinitOpt;             /* don't optimize initialized xdata */
      int noCcodeInAsm;           /* hide c-code from asm */
 diff --git a/src/SDCCglue.c b/src/SDCCglue.c
-index e21a49ac3..7d1a2473a 100644
+index e21a49ac3989a8391f7354b334c672f07ea3d7c0..274de8451a4e35c4574d133104b8e2145a3ff5f5 100644
 --- a/src/SDCCglue.c
 +++ b/src/SDCCglue.c
 @@ -378,7 +378,10 @@ emitRegularMap (memmap *map, bool addPublics, bool arFlag)
@@ -1770,7 +2111,23 @@ index e21a49ac3..7d1a2473a 100644
          }
  
        sym->ival = NULL;
-@@ -1922,6 +1925,9 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
+@@ -1747,6 +1750,15 @@ printIvalPtr (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oBuf)
+           break;
+         case 3:
+           dbuf_printf (oBuf, "; generic printIvalPtr\n");
++          if (TARGET_IS_MCS251)
++            {
++              /* Flat 24-bit addresses have no separate MCS-51 space tag.
++                 Keep literal initializers in the same big-endian order as
++                 relocated addresses and runtime pointer stores. */
++              dbuf_printf (oBuf, "\t.byte %s,%s,%s\n",
++                           aopLiteral (val, 2), aopLiteral (val, 1), aopLiteral (val, 0));
++              break;
++            }
+           if (port->little_endian)
+             dbuf_printf (oBuf, "\t.byte %s,%s", aopLiteral (val, 0), aopLiteral (val, 1));
+           else
+@@ -1922,6 +1934,9 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
        else
          {
            int size = getSize (sym->type);
@@ -1780,7 +2137,7 @@ index e21a49ac3..7d1a2473a 100644
  
            if (size == 0 && !(IS_STRUCT (sym->type) &&
                               SPEC_STRUCT (sym->type)->b_empty_complete))
-@@ -1937,6 +1943,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
+@@ -1937,6 +1952,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
                  }
                else if (options.const_seg && map != xinit && map != initializer)
                  dbuf_tprintf(&code->oBuf, "\t!area\n", options.const_seg);
@@ -1793,7 +2150,7 @@ index e21a49ac3..7d1a2473a 100644
                if (options.debug)
                  {
                    emitDebugSym (oBuf, sym);
-@@ -1960,6 +1972,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
+@@ -1960,6 +1981,12 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
            else
              {//printf("no ival.\n");
                /* allocate space */
@@ -1806,7 +2163,7 @@ index e21a49ac3..7d1a2473a 100644
                if (options.debug)
                  {
                    emitDebugSym (oBuf, sym);
-@@ -1971,7 +1989,7 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
+@@ -1971,7 +1998,7 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
                   IS_INT (sym->type->next) && !IS_LONG (sym->type->next) && SPEC_CVAL (sym->etype).v_char16 ||
                   IS_INT (sym->type->next) && IS_LONG (sym->type->next) && SPEC_CVAL (sym->etype).v_char32))
                  {
@@ -1815,7 +2172,7 @@ index e21a49ac3..7d1a2473a 100644
                      dbuf_tprintf(&code->oBuf, "\t!area\n", options.const_seg);
                    dbuf_printf (oBuf, "%s:\n", sym->rname);
                    if (IS_CHAR (sym->type->next))
-@@ -1988,7 +2006,10 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
+@@ -1988,7 +2015,10 @@ emitStaticSeg (memmap *map, struct dbuf_s *oBuf)
                else
                  {
                    dbuf_printf (oBuf, "%s:\n", sym->rname);
@@ -1827,7 +2184,7 @@ index e21a49ac3..7d1a2473a 100644
                  }
              }
          }
-@@ -2260,7 +2281,8 @@ emitOverlay (struct dbuf_s *aBuf)
+@@ -2260,7 +2290,8 @@ emitOverlay (struct dbuf_s *aBuf)
  
                /* allocate space */
                dbuf_tprintf (aBuf, "!slabeldef\n", sym->rname);
@@ -1838,7 +2195,7 @@ index e21a49ac3..7d1a2473a 100644
          }
      }
 diff --git a/src/SDCCicode.c b/src/SDCCicode.c
-index 2b29b7360..290086c75 100644
+index 2b29b7360a0303658c9b9368f24ea75cce62ea4f..290086c758d25b6f180350b52207f44a2d44460c 100644
 --- a/src/SDCCicode.c
 +++ b/src/SDCCicode.c
 @@ -2463,7 +2463,7 @@ geniCodePtrPtrSubtract (operand * left, operand * right)
@@ -1851,7 +2208,7 @@ index 2b29b7360..290086c75 100644
  
  subtractExit:
 diff --git a/src/SDCClrange.c b/src/SDCClrange.c
-index 9ba26969f..b14e27bc6 100644
+index 9ba26969fd6abffcf815463bf87bab47d9430962..b14e27bc67892534c060ec2ea0dea79025ed0cab 100644
 --- a/src/SDCClrange.c
 +++ b/src/SDCClrange.c
 @@ -460,7 +460,15 @@ findPrevUse (eBBlock *ebp, iCode *ic, operand *op,
@@ -1877,7 +2234,7 @@ index 9ba26969f..b14e27bc6 100644
  }
 -
 diff --git a/src/SDCCmain.c b/src/SDCCmain.c
-index 0f560a2d0..f6c7c8957 100644
+index 0f560a2d0f43393612329f6d725eff851a061fd2..b399be423c74460dbed8ed5acd27604c42b032d5 100644
 --- a/src/SDCCmain.c
 +++ b/src/SDCCmain.c
 @@ -1981,7 +1981,7 @@ linkEdit (char **envp)
@@ -1900,8 +2257,54 @@ index 0f560a2d0..f6c7c8957 100644
              {
                WRITE_SEG_LOC ("SSEG", options.stack_loc);
                /* with the disappearance of --no-pack-iram I don't think this is ever valid anymore */
+@@ -2563,25 +2565,40 @@ preProcess (char **envp)
+       if (options.dependencyFileOpt)
+         {
+           struct dbuf_s dbuf;
++          struct dbuf_s filename;
++          char *escaped;
+ 
+           dbuf_init (&dbuf, PATH_MAX);
++          dbuf_init (&filename, PATH_MAX);
+           if (options.dependencyFileOpt == SYSTEM_DEPENDENCY_FILE_OPT)
+             dbuf_append_str (&dbuf, "-MD ");
+           else
+             dbuf_append_str (&dbuf, "-MMD ");
+           dbuf_append_str (&dbuf, "-MF ");
+           if (fullDstFileName)
+-            dbuf_splitFile (fullDstFileName, &dbuf, NULL);
++            dbuf_splitFile (fullDstFileName, &filename, NULL);
+           else
+-            dbuf_append_str (&dbuf, dstFileName);
+-          dbuf_append_str (&dbuf, ".d");
++            dbuf_append_str (&filename, dstFileName);
++          dbuf_append_str (&filename, ".d");
++          /* These filenames become arguments to a host shell. Keep paths
++             containing spaces (or shell metacharacters) in one argument. */
++          escaped = shell_escape (dbuf_c_str (&filename));
++          dbuf_append_str (&dbuf, escaped);
++          Safe_free (escaped);
+           addSet (&preArgvSet, dbuf_detach_c_str (&dbuf));
+ 
+           dbuf_init (&dbuf, PATH_MAX);
++          dbuf_set_length (&filename, 0);
+           if (fullDstFileName)
+-            dbuf_printf (&dbuf, "-MT %s", fullDstFileName);
++            dbuf_append_str (&filename, fullDstFileName);
+           else
+-            dbuf_printf (&dbuf, "-MT %s%s", dstFileName, port->linker.rel_ext);
++            dbuf_printf (&filename, "%s%s", dstFileName, port->linker.rel_ext);
++          escaped = shell_escape (dbuf_c_str (&filename));
++          /* -MQ also quotes Make syntax in the emitted target, allowing
++             Arduino's dependency parser to identify the actual object. */
++          dbuf_printf (&dbuf, "-MQ %s", escaped);
++          Safe_free (escaped);
++          dbuf_destroy (&filename);
+           addSet (&preArgvSet, dbuf_detach_c_str (&dbuf));
+         }
+ 
 diff --git a/src/SDCCpeeph.c b/src/SDCCpeeph.c
-index 7a20b9257..74c370826 100644
+index 7a20b9257e132995227d350fa985bd924eee6e80..74c37082698baca89bd8b2257b23e196387c124e 100644
 --- a/src/SDCCpeeph.c
 +++ b/src/SDCCpeeph.c
 @@ -3119,9 +3119,10 @@ keyForVar (const char *d)
@@ -1945,7 +2348,7 @@ index 7a20b9257..74c370826 100644
    hTabAddItem (vtab, key, vvx);
  }
 diff --git a/src/SDCCutil.c b/src/SDCCutil.c
-index 1868fb74e..066ef6826 100644
+index 1868fb74e7a6281e8dc2e55e9c11abe527f80284..066ef682622a9b7b6a0e14c3bbf2164e04c79508 100644
 --- a/src/SDCCutil.c
 +++ b/src/SDCCutil.c
 @@ -1434,6 +1434,51 @@ decode_UCNs_to_utf8 (char *dest, const char *src, size_t n)
@@ -2001,7 +2404,7 @@ index 1868fb74e..066ef6826 100644
  process_identifier (char *dest, const char *src, size_t n)
  {
 diff --git a/src/SDCCutil.h b/src/SDCCutil.h
-index 4f45b1d71..0aae87361 100644
+index 4f45b1d71e42688e35a27ce70b2ccb5a8b0789ab..0aae87361efa24414249d5132f38519080da4387 100644
 --- a/src/SDCCutil.h
 +++ b/src/SDCCutil.h
 @@ -162,5 +162,6 @@ char *setPrefixSuffix(const char *);
@@ -2013,7 +2416,7 @@ index 4f45b1d71..0aae87361 100644
  #endif
 -
 diff --git a/src/mcs251/Makefile.in b/src/mcs251/Makefile.in
-index 1fb1218f6..980796472 100644
+index 1fb1218f6c314de2399cd093e4308705bb4df441..9807964724593c3af433a04d1cd5e05b1f6108d1 100644
 --- a/src/mcs251/Makefile.in
 +++ b/src/mcs251/Makefile.in
 @@ -37,6 +37,21 @@ check: all
@@ -2108,7 +2511,7 @@ index 1fb1218f6..980796472 100644
  		--device-include $(top_srcdir)/device/include \
  		--library-dir $(top_builddir)/device/lib/build/small \
 diff --git a/src/mcs251/gen.c b/src/mcs251/gen.c
-index 7f1907988..c77304895 100644
+index 7f19079887ee0dee4a9d7c1dab03a2773913bee8..d115d7f822ba71308dcdc11570302d0321d7996a 100644
 --- a/src/mcs251/gen.c
 +++ b/src/mcs251/gen.c
 @@ -53,6 +53,25 @@ extern int allocInfo;
@@ -2137,6 +2540,15 @@ index 7f1907988..c77304895 100644
  /*-----------------------------------------------------------------*/
  /* genMove_o - Copy part of one asmop to another                   */
  /*-----------------------------------------------------------------*/
+@@ -964,7 +983,7 @@ genPointerPush (iCode *ic)
+           loadFarPointerByte (TRUE);
+           break;
+         case GPOINTER:
+-          emitcode (RUNTIME_CALL, "__gptrget");
++          loadFarPointerByte (FALSE);
+           break;
+         default:
+           wassert (0);
 @@ -1761,6 +1780,15 @@ genFunction (iCode * ic)
  
    _G.dptrCache.valid = false;  /* new function: dptr is undefined */
@@ -2189,7 +2601,96 @@ index 7f1907988..c77304895 100644
        if (!inExcludeList ("dph"))
          emitpop ("dph");
        if (!inExcludeList ("dpl"))
-@@ -3292,6 +3333,95 @@ mcs251GenDwordArithmetic (operand *left, operand *right, operand *result,
+@@ -2697,7 +2738,7 @@ genRet (iCode *ic)
+                   emitAccumulatorExchange (tempRegs[2]->name);
+                   emitcode ("xch", "a,dpxl");
+                   emitAccumulatorExchange (tempRegs[2]->name);
+-                  emitcode (RUNTIME_CALL, "__gptrput");
++                  storeFarPointerByte ();
+                   if (i + 1 < size)
+                     {
+                       incrementFarPointer ();
+@@ -2752,7 +2793,7 @@ genRet (iCode *ic)
+                       emitcode ("mov", "dpxl,a");
+                     }
+                   emitpop ("acc");
+-                  emitcode (RUNTIME_CALL, "__gptrput");
++                  storeFarPointerByte ();
+                   emitpop ("dpxl");
+                   emitpop ("dph");
+                   emitpop ("dpl");
+@@ -2791,7 +2832,7 @@ genRet (iCode *ic)
+           for (int i = 0; i < size; i++)
+             {
+               MOVA (opGet (IC_LEFT (ic), i, false, false));
+-              emitcode (RUNTIME_CALL, "__gptrput");
++              storeFarPointerByte ();
+               if (i + 1 < size)
+                 incrementFarPointer ();
+             }
+@@ -3201,6 +3242,7 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
+ {
+   const char *resultDword;
+   bool preserveDword;
++  bool resultUsesScratch[16] = {false};
+   int offset;
+ 
+   if (AOP_SIZE (left) != 2 || AOP_SIZE (right) != 2 ||
+@@ -3212,6 +3254,16 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
+   resultDword = mcs251DwordForNativeTuple (AOP (result));
+   preserveDword = !resultDword || strcmp (resultDword, "dr12");
+ 
++  /* Partial scratch/result overlap needs a parallel copy and must not be
++     overwritten by the later scratch restore. */
++  if (AOP_TYPE (result) == AOP_REG)
++    for (offset = 0; offset < 4; ++offset)
++      {
++        int reg = AOP (result)->aopu.aop_reg[offset]->offset;
++        if (reg >= 0 && reg < 16)
++          resultUsesScratch[reg] = true;
++      }
++
+   emitpush ("r8");
+   emitpush ("r9");
+   if (preserveDword)
+@@ -3239,20 +3291,25 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
+   emitpop ("r13");
+   emitcode ("mul", "wr12,wr8");
+ 
+-  opPut (result, "r15", 0);
+-  opPut (result, "r14", 1);
+-  opPut (result, "r13", 2);
+-  opPut (result, "r12", 3);
+-
+   if (preserveDword)
+     {
+-      emitpop ("r15");
+-      emitpop ("r14");
+-      emitpop ("r13");
+-      emitpop ("r12");
++      /* Stage all four bytes before assigning any destination byte. */
++      emitpush ("r12");
++      emitpush ("r13");
++      emitpush ("r14");
++      emitpush ("r15");
++      for (offset = 0; offset < 4; ++offset)
++        {
++          emitpop ("acc");
++          opPut (result, "a", offset);
++        }
++      emitpop (resultUsesScratch[15] ? "acc" : "r15");
++      emitpop (resultUsesScratch[14] ? "acc" : "r14");
++      emitpop (resultUsesScratch[13] ? "acc" : "r13");
++      emitpop (resultUsesScratch[12] ? "acc" : "r12");
+     }
+-  emitpop ("r9");
+-  emitpop ("r8");
++  emitpop (resultUsesScratch[9] ? "acc" : "r9");
++  emitpop (resultUsesScratch[8] ? "acc" : "r8");
+ 
+   return TRUE;
+ }
+@@ -3292,6 +3349,95 @@ mcs251GenDwordArithmetic (operand *left, operand *right, operand *result,
    return TRUE;
  }
  
@@ -2285,7 +2786,7 @@ index 7f1907988..c77304895 100644
  /*-----------------------------------------------------------------*/
  /* genPlus - generates code for addition                           */
  /*-----------------------------------------------------------------*/
-@@ -3304,6 +3434,7 @@ genPlus (iCode * ic)
+@@ -3304,6 +3450,7 @@ genPlus (iCode * ic)
    bool swappedLR = FALSE;
    operand *leftOp, *rightOp;
    operand *op;
@@ -2293,7 +2794,7 @@ index 7f1907988..c77304895 100644
  
    D (emitcode (";", "genPlus"));
  
-@@ -3401,6 +3532,11 @@ genPlus (iCode * ic)
+@@ -3401,6 +3548,11 @@ genPlus (iCode * ic)
        goto release;
      }
  
@@ -2305,7 +2806,7 @@ index 7f1907988..c77304895 100644
    /* if the lower bytes of a literal are zero skip the addition */
    if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
      {
-@@ -3463,12 +3599,20 @@ genPlus (iCode * ic)
+@@ -3463,12 +3615,20 @@ genPlus (iCode * ic)
              }
            if (!size && maskedtopbyte)
              emitcode ("anl", "a,#!constbyte", topbytemask);
@@ -2328,7 +2829,7 @@ index 7f1907988..c77304895 100644
              {
                /* just move */
                opPut (IC_RESULT (ic), opGet (leftOp, offset, FALSE, FALSE), offset);
-@@ -3477,6 +3621,13 @@ genPlus (iCode * ic)
+@@ -3477,6 +3637,13 @@ genPlus (iCode * ic)
        offset++;
      }
  
@@ -2342,7 +2843,7 @@ index 7f1907988..c77304895 100644
    adjustArithmeticResult (ic);
  
  release:
-@@ -3674,6 +3825,7 @@ static void
+@@ -3674,6 +3841,7 @@ static void
  genMinus (iCode * ic)
  {
    int size, offset = 0;
@@ -2350,7 +2851,7 @@ index 7f1907988..c77304895 100644
  
    D (emitcode (";", "genMinus"));
  
-@@ -3711,6 +3863,11 @@ genMinus (iCode * ic)
+@@ -3711,6 +3879,11 @@ genMinus (iCode * ic)
                                 IC_RESULT (ic), "sub", FALSE))
      goto release;
  
@@ -2362,7 +2863,7 @@ index 7f1907988..c77304895 100644
    /* if literal, add a,#-lit, else normal subb */
    if (AOP_TYPE (IC_RIGHT (ic)) == AOP_LIT)
      {
-@@ -3741,12 +3898,21 @@ genMinus (iCode * ic)
+@@ -3741,12 +3914,21 @@ genMinus (iCode * ic)
                  }
                if (!size && maskedtopbyte)
                  emitcode ("anl", "a,#!constbyte", topbytemask);
@@ -2386,7 +2887,7 @@ index 7f1907988..c77304895 100644
                  {
                    opPut (IC_RESULT (ic), opGet (IC_LEFT (ic), offset, FALSE, FALSE), offset);
                  }
-@@ -3805,10 +3971,21 @@ genMinus (iCode * ic)
+@@ -3805,10 +3987,21 @@ genMinus (iCode * ic)
  
            if (!size && maskedtopbyte)
              emitcode ("anl", "a,#!constbyte", topbytemask);
@@ -2409,7 +2910,19 @@ index 7f1907988..c77304895 100644
    adjustArithmeticResult (ic);
  
  release:
-@@ -8861,7 +9038,7 @@ emitPtrByteSet (const char *rname, int p_type, const char *src)
+@@ -8843,7 +9036,10 @@ emitPtrByteGet (const char *rname, int p_type, bool preserveAinB)
+           emitpush ("b");
+           emitpush ("acc");
+         }
+-      emitcode (RUNTIME_CALL, "__gptrget");
++      /* Generic MCS251 pointers are flat 24-bit addresses. The runtime
++         helper performs this same load followed by a return; emit the
++         access here without adding a call frame for every byte. */
++      loadFarPointerByte (FALSE);
+       if (preserveAinB)
+         emitpop ("b");
+       break;
+@@ -8861,7 +9057,7 @@ emitPtrByteSet (const char *rname, int p_type, const char *src)
      {
      case IPOINTER:
      case POINTER:
@@ -2418,7 +2931,16 @@ index 7f1907988..c77304895 100644
          {
            MOVA (src);
            emitcode ("mov", "@%s,a", rname);
-@@ -8997,11 +9174,39 @@ finish:
+@@ -8882,7 +9078,7 @@ emitPtrByteSet (const char *rname, int p_type, const char *src)
+ 
+     case GPOINTER:
+       MOVA (src);
+-      emitcode (RUNTIME_CALL, "__gptrput");
++      storeFarPointerByte ();
+       break;
+     }
+ }
+@@ -8997,11 +9193,39 @@ finish:
  /*-----------------------------------------------------------------*/
  /* genDataPointerGet - generates code when ptr offset is known     */
  /*-----------------------------------------------------------------*/
@@ -2458,7 +2980,7 @@ index 7f1907988..c77304895 100644
    sym_link *type = operandType (result);
  
    D (emitcode (";", "genDataPointerGet"));
-@@ -9018,9 +9223,10 @@ genDataPointerGet (operand * left, operand * result, iCode * ic)
+@@ -9018,9 +9242,10 @@ genDataPointerGet (operand * left, operand * result, iCode * ic)
          type, physicalOffset, size);
  
        dbuf_init (&dbuf, 128);
@@ -2471,7 +2993,7 @@ index 7f1907988..c77304895 100644
          }
        else
          {
-@@ -9047,6 +9253,7 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+@@ -9047,6 +9272,7 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
    char *ifxCond = "a";
    sym_link *rtype, *retype;
    sym_link *ltype = operandType (left);
@@ -2479,7 +3001,7 @@ index 7f1907988..c77304895 100644
  
    D (emitcode (";", "genNearPointerGet"));
  
-@@ -9105,6 +9312,8 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+@@ -9105,6 +9331,8 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
    else
      rname = opGet (left, 0, FALSE, FALSE);
  
@@ -2488,7 +3010,7 @@ index 7f1907988..c77304895 100644
    /* if bitfield then unpack the bits */
    if (IS_BITFIELD (retype))
      ifxCond = genUnpackBits (result, rname, POINTER, ifx);
-@@ -9140,6 +9349,10 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+@@ -9140,6 +9368,10 @@ genNearPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
          }
      }
  
@@ -2499,7 +3021,7 @@ index 7f1907988..c77304895 100644
    /* now some housekeeping stuff */
    if (aop)                      /* we had to allocate for this iCode */
      {
-@@ -9188,6 +9401,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+@@ -9188,6 +9420,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
    const char *rname;
    char *ifxCond = "a";
    sym_link *rtype, *retype;
@@ -2507,7 +3029,7 @@ index 7f1907988..c77304895 100644
  
    D (emitcode (";", "genPagedPointerGet"));
  
-@@ -9217,6 +9431,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+@@ -9217,6 +9450,7 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
      }
  
    aopOp (result, ic, TRUE);
@@ -2515,7 +3037,7 @@ index 7f1907988..c77304895 100644
  
    /* if bitfield then unpack the bits */
    if (IS_BITFIELD (retype))
-@@ -9245,6 +9460,9 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
+@@ -9245,6 +9479,9 @@ genPagedPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iC
          }
      }
  
@@ -2525,7 +3047,7 @@ index 7f1907988..c77304895 100644
    /* now some housekeeping stuff */
    if (aop)                      /* we had to allocate for this iCode */
      {
-@@ -9310,6 +9528,7 @@ static void
+@@ -9310,6 +9547,7 @@ static void
  genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
  {
    int size, offset;
@@ -2533,7 +3055,7 @@ index 7f1907988..c77304895 100644
    bool mcs251FarResult;
    char *ifxCond = "a";
    sym_link *retype = getSpec (operandType (result));
-@@ -9333,6 +9552,8 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+@@ -9333,6 +9571,8 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
        emitcode ("mov", "dpx,dr28");
      }
  
@@ -2542,7 +3064,7 @@ index 7f1907988..c77304895 100644
    /* if bit then unpack */
    if (IS_BITFIELD (retype))
      ifxCond = genUnpackBits (result, farPointerRegister (), FPOINTER, ifx);
-@@ -9366,6 +9587,7 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+@@ -9366,6 +9606,7 @@ genFarPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
  
    if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
      {
@@ -2550,7 +3072,7 @@ index 7f1907988..c77304895 100644
        if (AOP_TYPE (left) == AOP_DPTR)
          mcs251WriteBackPostincrementedPointer (left);
        else
-@@ -9393,6 +9615,7 @@ static void
+@@ -9393,6 +9634,7 @@ static void
  genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
  {
    int size, offset;
@@ -2558,7 +3080,7 @@ index 7f1907988..c77304895 100644
    bool mcs251FarResult;
    char *ifxCond = "a";
    sym_link *retype = getSpec (operandType (result));
-@@ -9414,6 +9637,8 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+@@ -9414,6 +9656,8 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
        emitcode ("mov", "dpx,dr28");
      }
  
@@ -2567,7 +3089,7 @@ index 7f1907988..c77304895 100644
    /* if bit then unpack */
    if (IS_BITFIELD (retype))
      ifxCond = genUnpackBits (result, farPointerRegister (), CPOINTER, ifx);
-@@ -9447,6 +9672,7 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
+@@ -9447,6 +9691,7 @@ genCodePointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCo
  
    if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
      {
@@ -2575,7 +3097,7 @@ index 7f1907988..c77304895 100644
        if (AOP_TYPE (left) == AOP_DPTR)
          mcs251WriteBackPostincrementedPointer (left);
        else
-@@ -9474,6 +9700,7 @@ static void
+@@ -9474,6 +9719,7 @@ static void
  genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCode * ifx)
  {
    int size, offset;
@@ -2583,7 +3105,7 @@ index 7f1907988..c77304895 100644
    bool mcs251FarResult;
    char *ifxCond = "a";
    sym_link *retype = getSpec (operandType (result));
-@@ -9495,6 +9722,12 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+@@ -9495,6 +9741,12 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
        emitcode ("mov", "dpx,dr28");
      }
  
@@ -2596,7 +3118,16 @@ index 7f1907988..c77304895 100644
    /* if bit then unpack */
    if (IS_BITFIELD (retype))
      {
-@@ -9530,6 +9763,10 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+@@ -9510,7 +9762,7 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
+           int logicalOffset = mcs251PointerByteOffset (
+             operandType (result), offset, AOP_SIZE (result));
+ 
+-          emitcode (RUNTIME_CALL, "__gptrget");
++          loadFarPointerByte (FALSE);
+           if (!ifx)
+             {
+               if (mcs251FarResult)
+@@ -9530,6 +9782,10 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
  
    if (pi && AOP_TYPE (left) != AOP_IMMD && AOP_TYPE (left) != AOP_STR)
      {
@@ -2607,7 +3138,7 @@ index 7f1907988..c77304895 100644
        if (AOP_TYPE (left) == AOP_DPTR)
          mcs251WriteBackPostincrementedPointer (left);
        else
-@@ -9973,7 +10210,8 @@ genNearPointerSet (operand * right, operand * result, iCode * ic, iCode * pi)
+@@ -9973,7 +10229,8 @@ genNearPointerSet (operand * right, operand * result, iCode * ic, iCode * pi)
              operandType (right), physicalOffset,
              AOP_SIZE (right));
            const char *l = opGet (right, logicalOffset, FALSE, TRUE);
@@ -2617,7 +3148,53 @@ index 7f1907988..c77304895 100644
              {
                MOVA (l);
                emitcode ("mov", "@%s,a", rname);
-@@ -10632,7 +10870,9 @@ genJumpTab (iCode * ic)
+@@ -10239,7 +10496,7 @@ genGenPointerSet (operand * right, operand * result, iCode * ic, iCode * pi)
+           else
+             MOVA (opGet (right, logicalOffset, FALSE, FALSE));
+           offset++;
+-          emitcode (RUNTIME_CALL, "__gptrput");
++          storeFarPointerByte ();
+           if (size || pi)
+             {
+               incrementFarPointer ();
+@@ -10506,11 +10763,13 @@ genFarFarAssign (operand * result, operand * right, iCode * ic)
+ /*-----------------------------------------------------------------*/
+ /* genAssign - generate code for assignment                        */
+ /*-----------------------------------------------------------------*/
++static void mcs251CopyPlainBytes (operand *result, operand *right, int size);
++
+ static void
+ genAssign (iCode * ic)
+ {
+   operand *result, *right;
+-  int size, offset;
++  int size;
+ 
+   D (emitcode (";", "genAssign"));
+ 
+@@ -10569,18 +10828,9 @@ genAssign (iCode * ic)
+     }
+   else
+     {
+-      offset = 0;
+-      while (size--)
+-        {
+-          // Check for overwriting of result.
+-          if (result->aop->type == AOP_REG && right->aop->type == AOP_REG)
+-            for (int i = 0; i < offset; i++)
+-              if (result->aop->aopu.aop_reg[i]->rIdx == right->aop->aopu.aop_reg[offset]->rIdx)
+-                wassert (0);
+-
+-          opPut(result, opGet (right, offset, FALSE, FALSE), offset);
+-          offset++;
+-        }
++      /* Register allocation may permute a live generic-pointer tuple after
++         an indirect call. Use the same parallel-copy path as genCast. */
++      mcs251CopyPlainBytes (result, right, size);
+     }
+   adjustArithmeticResult (ic);
+ 
+@@ -10632,7 +10882,9 @@ genJumpTab (iCode * ic)
        jtab = newiTempLabel (NULL);
        emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtab->key));
        emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtab->key));
@@ -2628,7 +3205,7 @@ index 7f1907988..c77304895 100644
        emitLabel (jtab);
        /* now generate the jump labels */
        for (jtab = setFirstItem (IC_JTLABELS (ic)); jtab; jtab = setNextItem (IC_JTLABELS (ic)))
-@@ -10658,19 +10898,22 @@ genJumpTab (iCode * ic)
+@@ -10658,19 +10910,22 @@ genJumpTab (iCode * ic)
        MOVA (l);
        emitcode ("mov", "dptr,#!tlabel", labelKey2num (jtablo->key));
        emitcode ("mov", "dpxl,#(!tlabel >> 16)", labelKey2num (jtablo->key));
@@ -2655,7 +3232,7 @@ index 7f1907988..c77304895 100644
        emitpop ("dph");
        emitpop ("dpl");
 diff --git a/src/mcs251/gen_lower.c.inc b/src/mcs251/gen_lower.c.inc
-index 6ba73fbb0..8e6b2df15 100644
+index 6ba73fbb00a74346950d099a4701f0f67adecbea..8e6b2df1593ca8ffe76d72cfd8290158cf832128 100644
 --- a/src/mcs251/gen_lower.c.inc
 +++ b/src/mcs251/gen_lower.c.inc
 @@ -88,14 +88,11 @@ static struct
@@ -2898,7 +3475,7 @@ index 6ba73fbb0..8e6b2df15 100644
  }
 -
 diff --git a/src/mcs251/main.c b/src/mcs251/main.c
-index 2cd5ac357..85b60f9dc 100644
+index 2cd5ac357726984cc070b215bab8102fffe8563d..85b60f9dc09db1fef2644539f32329b5503453ff 100644
 --- a/src/mcs251/main.c
 +++ b/src/mcs251/main.c
 @@ -51,6 +51,8 @@ static OPTION _mcs251_options[] =
@@ -2935,7 +3512,7 @@ index 2cd5ac357..85b60f9dc 100644
  
  /* $3 is replaced by assembler.debug_opts resp. port->assembler.plain_opts */
 diff --git a/src/mcs251/peep.c b/src/mcs251/peep.c
-index dd2cb0770..4402f0c81 100644
+index dd2cb0770fa771f138812d042c9b7cdd51762f36..afb0451327cdfb017dbac2d22f580da46cdd0fb7 100644
 --- a/src/mcs251/peep.c
 +++ b/src/mcs251/peep.c
 @@ -343,11 +343,16 @@ scan4op (lineNode **pl, const char *pReg, const char *untilOp,
@@ -2958,17 +3535,35 @@ index dd2cb0770..4402f0c81 100644
  
            /* when looking for push or pop and we find a direct access of sp: abort */
            if (findPushPop && strstr (p, "sp"))
+@@ -472,7 +477,13 @@ scan4op (lineNode **pl, const char *pReg, const char *untilOp,
+             if (strncmp ("jc",  (*pl)->line, 2) == 0 ||
+                 strncmp ("jnc", (*pl)->line, 3) == 0 ||
+                 strncmp ("jz",  (*pl)->line, 2) == 0 ||
+-                strncmp ("jnz", (*pl)->line, 3) == 0)
++                strncmp ("jnz", (*pl)->line, 3) == 0 ||
++                strncmp ("je",  (*pl)->line, 2) == 0 ||
++                strncmp ("jne", (*pl)->line, 3) == 0 ||
++                strncmp ("jg",  (*pl)->line, 2) == 0 ||
++                strncmp ("jl",  (*pl)->line, 2) == 0 ||
++                strncmp ("jo",  (*pl)->line, 2) == 0 ||
++                strncmp ("jno", (*pl)->line, 3) == 0)
+               {
+                 isConditionalJump = TRUE;
+                 break;
 diff --git a/src/mcs251/peeph-mcs251.def b/src/mcs251/peeph-mcs251.def
-index 0a5c917d8..232c47456 100644
+index 0a5c917d816c40aa286750c675cd4aaed54f7f5b..1305232acf9156742195c8e1604c8130aec24a06 100644
 --- a/src/mcs251/peeph-mcs251.def
 +++ b/src/mcs251/peeph-mcs251.def
-@@ -635,80 +635,82 @@ replace {
+@@ -635,80 +635,93 @@ replace {
  // Merge byte-pair hardware-stack loads into native 16-bit WR loads.
  // The generator ships 16-bit stack operands through the accumulator one
  // byte at a time:  mov a,@spx-0xNNNN; mov r7,a; mov a,@spx-0x(NNNN+1);
 -// mov r6,a  (10 bytes) becomes the native little-endian word load
+-// mov wr6,@spx-0x(NNNN+1)  (4 bytes, 6 bytes saved).  inSequence() proves
 +// mov r6,a  (10 bytes) becomes the native word load
- // mov wr6,@spx-0x(NNNN+1)  (4 bytes, 6 bytes saved).  inSequence() proves
++// mov wr6,@spx-0x(NNNN+1); mov a,r6.  Preserve the final byte in A:
++// later sign tests, shifts, or stores can consume it after register tracking
++// has removed a redundant reload.  inSequence() proves
  // the hex offsets are consecutive.  The byte order was verified against
  // QEMU: WRj loads Rj from the lower address and Rj+1 from the higher one,
  // which is exactly what the accumulator pair produced.
@@ -2984,6 +3579,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	wr6,@spx-0x%2
 +	mov	wr6,@spx-%2
++	mov	a,r6
  } if inSequence('1' %1 %2)
  
  replace {
@@ -2996,6 +3592,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	wr4,@spx-0x%2
 +	mov	wr4,@spx-%2
++	mov	a,r4
  } if inSequence('1' %1 %2)
  
  replace {
@@ -3008,6 +3605,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	wr2,@spx-0x%2
 +	mov	wr2,@spx-%2
++	mov	a,r2
  } if inSequence('1' %1 %2)
  
  replace {
@@ -3020,9 +3618,11 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	wr0,@spx-0x%2
 +	mov	wr0,@spx-%2
++	mov	a,r0
  } if inSequence('1' %1 %2)
  
  // Merge byte-pair hardware-stack stores into native 16-bit WR stores.
++// These also leave the final source byte in A, even if the store is folded.
  replace {
  	mov	a,r7
 -	mov	@spx-0x%1,a
@@ -3033,6 +3633,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	@spx-0x%2,wr6
 +	mov	@spx-%2,wr6
++	mov	a,r6
  } if inSequence('1' %1 %2)
  
  replace {
@@ -3045,6 +3646,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	@spx-0x%2,wr4
 +	mov	@spx-%2,wr4
++	mov	a,r4
  } if inSequence('1' %1 %2)
  
  replace {
@@ -3057,6 +3659,7 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	@spx-0x%2,wr2
 +	mov	@spx-%2,wr2
++	mov	a,r2
  } if inSequence('1' %1 %2)
  
  replace {
@@ -3069,9 +3672,12 @@ index 0a5c917d8..232c47456 100644
  } by {
 -	mov	@spx-0x%2,wr0
 +	mov	@spx-%2,wr0
++	mov	a,r0
  } if inSequence('1' %1 %2)
 diff --git a/src/mcs251/tests/check-codegen.sh b/src/mcs251/tests/check-codegen.sh
-index 52b6af8d5..c6283034b 100755
+old mode 100755
+new mode 100644
+index 52b6af8d5fd6c25b3f3aec2027fadd30ff11012f..c6283034bd3db9d84710d876fbb2cfe648c13233
 --- a/src/mcs251/tests/check-codegen.sh
 +++ b/src/mcs251/tests/check-codegen.sh
 @@ -246,9 +246,11 @@ fi
@@ -3089,7 +3695,9 @@ index 52b6af8d5..c6283034b 100755
  
  # MCS251 far and generic pointers are flat 24-bit values even outside the
 diff --git a/src/mcs251/tests/check-elf-output.py b/src/mcs251/tests/check-elf-output.py
-index a73c50992..15444bc1e 100755
+old mode 100755
+new mode 100644
+index a73c50992a1dbcb8d53bf243dd921a471bc1bacb..15444bc1eb60c9d3605ff79ea60afc39ff459058
 --- a/src/mcs251/tests/check-elf-output.py
 +++ b/src/mcs251/tests/check-elf-output.py
 @@ -85,4 +85,4 @@ def main():
@@ -3101,10 +3709,10 @@ index a73c50992..15444bc1e 100755
 +    sys.exit(main())
 diff --git a/src/mcs251/tests/check-generic-address-roundtrip.py b/src/mcs251/tests/check-generic-address-roundtrip.py
 new file mode 100644
-index 000000000..222ff4bf1
+index 0000000000000000000000000000000000000000..5bd722c548025cc72a9ab44012184e49a1f6e0cd
 --- /dev/null
 +++ b/src/mcs251/tests/check-generic-address-roundtrip.py
-@@ -0,0 +1,148 @@
+@@ -0,0 +1,150 @@
 +#!/usr/bin/env python3
 +"""Verify that &pointer[index] retains its extended address space."""
 +
@@ -3173,14 +3781,16 @@ index 000000000..222ff4bf1
 +        lane,
 +        ("generic_load_redundant", "generic_load_canonical"),
 +        "genGenPointerGet",
-+        r"\b__gptrget\b",
++        (r"^[ \t]*mov[ \t]+a,@dpx[ \t]*$" if port == "mcs251"
++         else r"\b__gptrget\b"),
 +    )
 +    require_path(
 +        assembly,
 +        lane,
 +        ("generic_store_redundant", "generic_store_canonical"),
 +        "genGenPointerSet",
-+        r"\b__gptrput\b",
++        (r"^[ \t]*mov[ \t]+@dpx,a[ \t]*$" if port == "mcs251"
++         else r"\b__gptrput\b"),
 +    )
 +
 +    if port == "mcs251":
@@ -3254,7 +3864,7 @@ index 000000000..222ff4bf1
 +if __name__ == "__main__":
 +    main()
 diff --git a/src/mcs251/tests/check-mcs51-qemu.py b/src/mcs251/tests/check-mcs51-qemu.py
-index 430a93bc9..252f33f92 100644
+index 430a93bc905477edb0003d980b10e7fd0d851416..252f33f92226a69f821813106d36de7728a17073 100644
 --- a/src/mcs251/tests/check-mcs51-qemu.py
 +++ b/src/mcs251/tests/check-mcs51-qemu.py
 @@ -162,6 +162,9 @@ def main():
@@ -3352,7 +3962,7 @@ index 430a93bc9..252f33f92 100644
              sdcc, longlong_source, device_include,
              stack_auto_library_dir, output_dir,
 diff --git a/src/mcs251/tests/check-qemu.py b/src/mcs251/tests/check-qemu.py
-index 25c717261..58f65aad1 100644
+index 25c7172617257af948d1ea88c4cd662190e4d5c8..79704c6bbeeb61196a7d99db2c4b3f9e39ccba57 100644
 --- a/src/mcs251/tests/check-qemu.py
 +++ b/src/mcs251/tests/check-qemu.py
 @@ -4,6 +4,7 @@ import argparse
@@ -3568,6 +4178,15 @@ index 25c717261..58f65aad1 100644
          for runtime_name, model_flags, runtime_library_dir in \
                  runtime_configurations:
              runtime_image = tmpdir / f"runtime-{runtime_name}.hex"
+@@ -341,7 +512,7 @@ def main():
+             if "-DMCS251_SKIP_BSEARCH" not in skipped:
+                 required_symbols.append("_bsearch")
+             if not args.runtime_cflag:
+-                required_symbols.append("__gptrget")
++                required_symbols.extend(("__gptrget", "__gptrput"))
+             for symbol in required_symbols:
+                 if symbol not in runtime_map:
+                     raise SystemExit(
 @@ -488,6 +659,7 @@ def main():
                      trace_for(optimization_image),
                  ))
@@ -3644,12 +4263,123 @@ index 25c717261..58f65aad1 100644
  
  if __name__ == "__main__":
      main()
+diff --git a/src/mcs251/tests/check-signed-divmod-runtime.py b/src/mcs251/tests/check-signed-divmod-runtime.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..1a743d6d9b7569a2557dcd58458d7494e26c2ed9
+--- /dev/null
++++ b/src/mcs251/tests/check-signed-divmod-runtime.py
+@@ -0,0 +1,105 @@
++#!/usr/bin/env python3
++"""Compare 16/32/64-bit target division against Python integer references."""
++import argparse
++import json
++from pathlib import Path
++import subprocess
++import importlib.util
++import tempfile
++
++
++def cases(bits):
++    limit = 1 << (bits - 1)
++    numerators = [-limit, -limit+1, -257, -255, -1, 0, 1, 255, 257, limit-1]
++    denominators = [-limit, -257, -4, -1, 1, 2, 255, limit-1]
++    for x in numerators:
++        for y in denominators:
++            if x == -limit and y == -1:  # Undefined in C and LLVM.
++                continue
++            q = (abs(x) // abs(y)) * (-1 if (x < 0) != (y < 0) else 1)
++            yield x, y, q, x-q*y
++
++
++def source():
++    parts = ['__sfr __at (0x99) SBUF;']
++    for bits, ctype, suffix in ((16, 'int', 'U'), (32, 'long', 'UL'),
++                                 (64, 'long long', 'ULL')):
++        def literal(value):
++            return f'({ctype})0x{value & ((1 << bits)-1):x}{suffix}'
++        table = ',\n'.join('{' + ','.join(map(literal, row)) + '}' for row in cases(bits))
++        parts.append(f'''
++struct row{bits} {{ {ctype} x, y, q, r; }};
++static const struct row{bits} rows{bits}[] = {{ {table} }};
++static volatile {ctype} x{bits}, y{bits};
++static unsigned char check{bits}(void) {{
++  unsigned char i;
++  for (i=0; i<sizeof(rows{bits})/sizeof(rows{bits}[0]); ++i) {{
++    x{bits}=rows{bits}[i].x; y{bits}=rows{bits}[i].y;
++    if (x{bits}/y{bits} != rows{bits}[i].q || x{bits}%y{bits} != rows{bits}[i].r)
++      return 0;
++  }}
++  return 1;
++}}
++''')
++    parts.append('''
++void main(void) {
++  if (check16() && check32() && check64()) {
++    SBUF='P'; SBUF='A'; SBUF='S'; SBUF='S';
++  } else {
++    SBUF='F'; SBUF='A'; SBUF='I'; SBUF='L';
++  }
++  SBUF='\n';
++  for (;;) {}
++}
++'''.replace("SBUF='\n'", "SBUF='\\n'"))
++    return '\n'.join(parts)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--sdcc', type=Path, required=True)
++    parser.add_argument('--qemu', type=Path, required=True)
++    parser.add_argument('--work-dir', type=Path)
++    args = parser.parse_args()
++    spec = importlib.util.spec_from_file_location('check_qemu', Path(__file__).with_name('check-qemu.py'))
++    qemu_check = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(qemu_check)
++    machine = qemu_check.resolve_machine(args.qemu, None)
++    with tempfile.TemporaryDirectory(prefix='signed-divmod-') as temporary:
++        work = args.work_dir or Path(temporary)
++        work.mkdir(parents=True, exist_ok=True)
++        fixture = work/'signed-divmod.c'
++        fixture.write_text(source())
++        reports = []
++        for model in ('small', 'large'):
++            for stack_auto in (False, True):
++                name = model + ('-stack-auto' if stack_auto else '')
++                image = work/(name+'.hex')
++                command = [str(args.sdcc.resolve()), '-mmcs251', '--model-'+model,
++                           '--std-sdcc11', '--no-xinit-opt', '--code-loc', '0xff0000',
++                           str(fixture), '-o', str(image)]
++                if stack_auto:
++                    command.append('--stack-auto')
++                result = subprocess.run(command, capture_output=True, text=True)
++                (work/(name+'.build.log')).write_text(result.stdout+result.stderr)
++                if result.returncode:
++                    raise AssertionError(f'{name}: {result.stdout}{result.stderr}')
++                try:
++                    output = qemu_check.run_qemu(args.qemu, machine, image)
++                    status = 'PASS'
++                except SystemExit as error:
++                    output = str(error).encode()
++                    status = 'FAIL'
++                (work/(name+'.runtime.log')).write_bytes(output)
++                reports.append({'model': name, 'status': status, 'vectors': 237,
++                                'quotient_and_remainder_comparisons': 474})
++        passed = all(row['status'] == 'PASS' for row in reports)
++        report = {'status': 'PASS' if passed else 'FAIL', 'models': reports, 'comparisons': 1896}
++        (work/'results.json').write_text(json.dumps(report, indent=2)+'\n')
++        print(json.dumps(report))
++        if not passed:
++            raise SystemExit(1)
++
++
++if __name__ == '__main__':
++    main()
 diff --git a/src/mcs251/tests/check-stack-word-peephole.py b/src/mcs251/tests/check-stack-word-peephole.py
 new file mode 100644
-index 000000000..b6c52a771
+index 0000000000000000000000000000000000000000..eb8c7af4a54119aadbceb188510ddce5889e2ab3
 --- /dev/null
 +++ b/src/mcs251/tests/check-stack-word-peephole.py
-@@ -0,0 +1,326 @@
+@@ -0,0 +1,338 @@
 +#!/usr/bin/env python3
 +"""Check MCS251 stack word folds across hexadecimal boundaries."""
 +
@@ -3742,6 +4472,7 @@ index 000000000..b6c52a771
 +            rf"mov\s+r{low},a\s*"
 +            rf"\}}\s*by\s*\{{\s*"
 +            rf"mov\s+wr{low},@spx-%2\s*"
++            rf"mov\s+a,r{low}\s*"
 +            rf"\}}\s*if\s+inSequence\('1'\s+%1\s+%2\)",
 +            re.IGNORECASE,
 +        )
@@ -3753,6 +4484,7 @@ index 000000000..b6c52a771
 +            rf"mov\s+@spx-%2,a\s*"
 +            rf"\}}\s*by\s*\{{\s*"
 +            rf"mov\s+@spx-%2,wr{low}\s*"
++            rf"mov\s+a,r{low}\s*"
 +            rf"\}}\s*if\s+inSequence\('1'\s+%1\s+%2\)",
 +            re.IGNORECASE,
 +        )
@@ -3911,6 +4643,16 @@ index 000000000..b6c52a771
 +            "unfolded true WR4 byte-load sequence",
 +        )
 +        true_store = function_body(probe_text, "true_store_wr4")
++        require_instruction_sequence(
++            true_load,
++            (r"mov\s+wr4,@spx-0x0040", r"mov\s+a,r4", r"xrl\s+a,#0x5a"),
++            "stack load preserves live accumulator",
++        )
++        require_instruction_sequence(
++            true_store,
++            (r"mov\s+@spx-0x0040,wr4", r"mov\s+a,r4", r"xrl\s+a,#0x5a"),
++            "stack store preserves live accumulator",
++        )
 +        require_instruction(
 +            true_store,
 +            r"mov\s+@spx-0x0040,wr4",
@@ -3978,7 +4720,7 @@ index 000000000..b6c52a771
 +    main()
 diff --git a/src/mcs251/tests/check-wide-pointer-arithmetic.py b/src/mcs251/tests/check-wide-pointer-arithmetic.py
 new file mode 100644
-index 000000000..117d19221
+index 0000000000000000000000000000000000000000..117d19221acd99c12f48553849a4a419be619926
 --- /dev/null
 +++ b/src/mcs251/tests/check-wide-pointer-arithmetic.py
 @@ -0,0 +1,113 @@
@@ -4095,8 +4837,557 @@ index 000000000..117d19221
 +
 +if __name__ == "__main__":
 +    main()
+diff --git a/src/mcs251/tests/cpp100-check.py b/src/mcs251/tests/cpp100-check.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c75e8a6d3e8c284862bc1a6c6516134272064596
+--- /dev/null
++++ b/src/mcs251/tests/cpp100-check.py
+@@ -0,0 +1,40 @@
++#!/usr/bin/env python3
++"""Run native-C reductions of four C++ lowering/backend miscompiles."""
++import argparse,json,os,re,selectors,subprocess,time
++from pathlib import Path
++p=argparse.ArgumentParser(description=__doc__);p.add_argument('--sdcc',required=True);p.add_argument('--qemu',required=True);p.add_argument('--work',type=Path,required=True);a=p.parse_args();a.work.mkdir(parents=True,exist_ok=True)
++values=[0,1,2,3,7,15,31,127,255,256,257,65535,65536,0x7fffffff,0x80000000,0xffffffff,0x12345678,0x89abcdef,0x01020304,0xffff0001]
++def reference(n,x):
++    if n==66:return x&0xffffff
++    if n==14:
++        s=x if x<2**31 else x-2**32
++        return (s<0)+2*(s>-257)+4*(s==255)+8*(s<=32767)
++    if n==23:return sum(i*x for i in range((x&15)+16) if not i&1)&0xffffffff
++    return ((x^17)+((x>>8)&65535)*257+(x&255))&0xffffffff
++reports=[]
++for n in (14,23,46,66):
++    name=str(n);image=a.work/(name+'.hex')
++    source=Path(__file__).with_name('cpp100-pointer-init.c' if n==66 else 'cpp100-control-flow.c' if n==23 else 'cpp100-regressions.c')
++    build=subprocess.run([a.sdcc,'-mmcs251','--model-large','--stack-auto','--std-sdcc11','--opt-code-size','--nogcse','--code-loc','0xff0000','--no-xinit-opt','-DTEST='+name,str(source),'-o',str(image)],capture_output=True,text=True)
++    (a.work/(name+'.build.log')).write_text(build.stdout+build.stderr)
++    if build.returncode:reports.append(dict(case=n,status='BUILD_FAIL'));continue
++    process=subprocess.Popen([a.qemu,'-M','stc32g144k246','-bios',str(image),'-accel','tcg','-icount','shift=0,align=off,sleep=off','-display','none','-monitor','none','-serial','stdio'],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
++    sel=selectors.DefaultSelector();sel.register(process.stdout,selectors.EVENT_READ);start=time.monotonic();output=b''
++    try:
++        while time.monotonic()-start<4:
++            if not sel.select(.1):continue
++            chunk=os.read(process.stdout.fileno(),65536)
++            if not chunk:break
++            output+=chunk
++            if b'DONE' in output:break
++    finally:
++        sel.close();process.terminate()
++        try:process.wait(timeout=1)
++        except subprocess.TimeoutExpired:process.kill();process.wait()
++    (a.work/(name+'.qemu.txt')).write_bytes(output)
++    actual=[int(x,16) for x in re.findall(rb'^([0-9A-F]{8})\r?$',output,re.M)]
++    expected=[reference(n,x) for x in values]
++    reports.append(dict(case=n,status='PASS' if actual==expected and b'DONE' in output else 'FAIL',expected=expected,actual=actual))
++(a.work/'results.json').write_text(json.dumps(reports,indent=2)+'\n')
++print(json.dumps([{'case':r['case'],'status':r['status']} for r in reports]))
++if any(r['status']!='PASS' for r in reports):raise SystemExit(1)
+diff --git a/src/mcs251/tests/cpp100-control-flow.c b/src/mcs251/tests/cpp100-control-flow.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..bb53e8af4ae4bf60be89eaa18424ad735cab6f45
+--- /dev/null
++++ b/src/mcs251/tests/cpp100-control-flow.c
+@@ -0,0 +1,265 @@
++/* Preserved CBE output of cpp100 case 23: conditional branch push/pop regression. */
++/* Generated by tools/cpp-cli/adapt.py. */
++#include <stddef.h>
++#include <stdint.h>
++#ifndef __cplusplus
++typedef unsigned char bool;
++#endif
++
++#define __forceinline inline
++#define __ATTRIBUTE_WEAK__
++#define __MSVC_INLINE__
++#define __ATTRIBUTELIST__(x)
++#define __FUNCTIONALIGN__(x)
++#define __attribute__(x)
++#define __builtin_expect(value, expected) (value)
++#define __builtin_unreachable() do { } while (0)
++
++
++/* Global Declarations */
++
++/* Types Declarations */
++
++/* Function definitions */
++
++
++
++
++/* Types Definitions */
++
++/* Global Variable Declarations */
++static uint32_t input;
++static uint32_t result;
++
++/* Function Declarations */
++static uint32_t _ZN8case_0233runEm(uint32_t _1) __ATTRIBUTELIST__((noinline, nothrow));
++static uint32_t case_023_run(uint32_t _22) __ATTRIBUTELIST__((noinline, nothrow));
++void __stcxx_run_global_ctors(void) __ATTRIBUTELIST__((noinline, nothrow));
++uint16_t __stcxx_bridge_ctor_count(void);
++void __stcxx_bridge_invoke_ctor(uint16_t _43);
++void __stcxx_abi_stc_arduino_cxx_v1_mcs251_be_size4_pdiff4_ptr3_fnptr3_guard1_direct(void) __ATTRIBUTELIST__((noinline, nothrow));
++void stcxx_runtime_panic(uint8_t _35) __ATTRIBUTELIST__((noinline, nothrow));
++void setup(void) __ATTRIBUTELIST__((noinline, nothrow));
++void loop(void) __ATTRIBUTELIST__((noinline, nothrow));
++
++
++/* Global Variable Definitions and Initialization */
++static uint32_t input = 1;
++static uint32_t result;
++
++
++/* LLVM Intrinsic Builtin Function Bodies */
++static __forceinline uint16_t llvm_add_u16(uint16_t a, uint16_t b) {
++  uint16_t r = a + b;
++  return r;
++}
++static __forceinline uint32_t llvm_add_u32(uint32_t a, uint32_t b) {
++  uint32_t r = a + b;
++  return r;
++}
++static __forceinline uint32_t llvm_mul_u32(uint32_t a, uint32_t b) {
++  uint32_t r = a * b;
++  return r;
++}
++static __forceinline uint16_t llvm_and_u16(uint16_t a, uint16_t b) {
++  uint16_t r = a & b;
++  return r;
++}
++
++
++/* Function Bodies */
++
++static uint32_t _ZN8case_0233runEm(uint32_t _1) {
++  uint32_t _2;    /* Address-exposed local */
++  uint32_t _3;    /* Address-exposed local */
++  uint16_t _4;    /* Address-exposed local */
++  uint16_t _5;
++  uint16_t _6;
++  uint32_t _7;
++  uint16_t _8;
++  uint16_t _9;
++  uint32_t _10;
++  uint32_t _11;
++  uint16_t _12;
++  uint32_t _13;
++
++  _2 = _1;
++  _3 = 0;
++  _4 = 0;
++  goto _14;
++
++  do {     /* Syntactic loop '' to make GCC happy */
++_14:
++  _5 = _4;
++  if ((((uint16_t)_5) < ((uint16_t)((uint16_t)32)))) {
++    goto _15;
++  } else {
++    goto _16;
++  }
++
++_15:
++  _6 = _4;
++  _7 = _2;
++  if (((((uint32_t)(uint16_t)_6)) == (llvm_add_u32((_7 & 15), 16)))) {
++    goto _17;
++  } else {
++    goto _18;
++  }
++
++_18:
++  _8 = _4;
++  if (((llvm_and_u16(_8, 1)) != ((uint16_t)0))) {
++    goto _19;
++  } else {
++    goto _20;
++  }
++
++_20:
++  _9 = _4;
++  _10 = _2;
++  _11 = _3;
++  _3 = (llvm_add_u32(_11, (llvm_mul_u32((((uint32_t)(uint16_t)_9)), _10))));
++  goto _21;
++
++_19:
++  goto _21;
++
++_21:
++  _12 = _4;
++  _4 = (llvm_add_u16(_12, 1));
++  goto _14;
++
++  } while (1); /* end of syntactic loop '' */
++_17:
++  goto _16;
++
++_16:
++  _13 = _3;
++  return _13;
++}
++
++
++static uint32_t case_023_run(uint32_t _22) {
++  uint32_t _23;    /* Address-exposed local */
++  uint32_t _24;
++  uint32_t _25;
++
++  _23 = _22;
++  _24 = _23;
++  _25 = _ZN8case_0233runEm(_24);
++  return _25;
++}
++
++
++void __stcxx_run_global_ctors(void) {
++  uint16_t _26;    /* Address-exposed local */
++  uint16_t _27;
++  uint16_t _28;
++  uint16_t _29;
++  uint16_t _30;
++
++  _26 = 0;
++  goto _31;
++
++  do {     /* Syntactic loop '' to make GCC happy */
++_31:
++  _27 = _26;
++  _28 = __stcxx_bridge_ctor_count();
++  if ((((uint16_t)_27) < ((uint16_t)_28))) {
++    goto _32;
++  } else {
++    goto _33;
++  }
++
++_32:
++  _29 = _26;
++  __stcxx_bridge_invoke_ctor(_29);
++  goto _34;
++
++_34:
++  _30 = _26;
++  _26 = (llvm_add_u16(_30, 1));
++  goto _31;
++
++  } while (1); /* end of syntactic loop '' */
++_33:
++  return;
++}
++
++
++void __stcxx_abi_stc_arduino_cxx_v1_mcs251_be_size4_pdiff4_ptr3_fnptr3_guard1_direct(void) {
++  return;
++}
++
++
++void stcxx_runtime_panic(uint8_t _35) {
++  uint8_t _36;    /* Address-exposed local */
++  uint8_t _37;
++
++  _36 = _35;
++  _37 = _36;
++  *(volatile uint32_t*)(&result) = (((uint32_t)(uint8_t)_37));
++  goto _38;
++
++  do {     /* Syntactic loop '' to make GCC happy */
++_38:
++  goto _38;
++
++  } while (1); /* end of syntactic loop '' */
++}
++
++
++void setup(void) {
++  uint32_t _39;
++  uint32_t _40;
++
++  __stcxx_run_global_ctors();
++  _39 = *(volatile uint32_t*)(&input);
++  _40 = case_023_run(_39);
++  *(volatile uint32_t*)(&result) = _40;
++}
++
++
++void loop(void) {
++  uint32_t _41;
++  uint32_t _42;
++
++  _41 = *(volatile uint32_t*)(&input);
++  _42 = case_023_run(_41);
++  *(volatile uint32_t*)(&result) = _42;
++}
++
++/* Constructor bridge generated from llvm.global_ctors. */
++extern void main(void);
++
++void __stcxx_bridge_require_core_main(void)
++{
++  (void)main();
++}
++
++void __stcxx_bridge_require_abi(void)
++{
++  __stcxx_abi_stc_arduino_cxx_v1_mcs251_be_size4_pdiff4_ptr3_fnptr3_guard1_direct();
++}
++
++uint16_t __stcxx_bridge_ctor_count(void)
++{
++  return (uint16_t)0u;
++}
++
++void __stcxx_bridge_invoke_ctor(uint16_t index)
++{
++  switch (index) {
++  default:
++    stcxx_runtime_panic(2);
++    return;
++  }
++}
++
++unsigned long get_result(void){return result;}void set_input(unsigned long x){input=x;}
++
++__sfr __at(0x99) SBUF;
++extern void setup(void);extern void loop(void);
++extern unsigned long get_result(void);extern void set_input(unsigned long);
++static void hex(unsigned long x){unsigned char i;for(i=0;i<8;i++){unsigned char b=x>>28;SBUF=b<10?'0'+b:'A'+b-10;x<<=4;}SBUF='\n';}
++void main(void){setup();set_input(0x0UL);loop();hex(get_result());set_input(0x1UL);loop();hex(get_result());set_input(0x2UL);loop();hex(get_result());set_input(0x3UL);loop();hex(get_result());set_input(0x7UL);loop();hex(get_result());set_input(0xfUL);loop();hex(get_result());set_input(0x1fUL);loop();hex(get_result());set_input(0x7fUL);loop();hex(get_result());set_input(0xffUL);loop();hex(get_result());set_input(0x100UL);loop();hex(get_result());set_input(0x101UL);loop();hex(get_result());set_input(0xffffUL);loop();hex(get_result());set_input(0x10000UL);loop();hex(get_result());set_input(0x7fffffffUL);loop();hex(get_result());set_input(0x80000000UL);loop();hex(get_result());set_input(0xffffffffUL);loop();hex(get_result());set_input(0x12345678UL);loop();hex(get_result());set_input(0x89abcdefUL);loop();hex(get_result());set_input(0x1020304UL);loop();hex(get_result());set_input(0xffff0001UL);loop();hex(get_result()); SBUF='D';SBUF='O';SBUF='N';SBUF='E';SBUF='\n';for(;;){}}
+diff --git a/src/mcs251/tests/cpp100-pointer-init.c b/src/mcs251/tests/cpp100-pointer-init.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..15f81afd4ddbed4156db50bd2f1e20b9feeb8966
+--- /dev/null
++++ b/src/mcs251/tests/cpp100-pointer-init.c
+@@ -0,0 +1,22 @@
++/* A 24-bit MCS-251 pointer is a flat big-endian address, not the
++ * MCS-51 little-endian address followed by an address-space tag.
++ * CBE represents Itanium virtual-base offsets as pointer constants. */
++#include <stdint.h>
++__sfr __at(0x99) SBUF;
++#define P(x) ((void *)(uintptr_t)(x))
++static void *const pointers[] = {
++  P(0), P(1), P(2), P(3), P(7), P(15), P(31), P(127), P(255), P(256),
++  P(257), P(65535), P(65536), P(0x7fffffffUL), P(0x80000000UL),
++  P(-1L), P(0x12345678UL), P(0x89abcdefUL), P(0x01020304UL), P(-65535L)
++};
++static void hex(uint32_t x) {
++  unsigned char i;
++  for(i=0;i<8;++i) { unsigned char b=x>>28; SBUF=b<10?'0'+b:'A'+b-10; x<<=4; }
++  SBUF='\n';
++}
++void main(void) {
++  volatile unsigned char i;
++  for(i=0;i<20;++i) hex((uintptr_t)pointers[i]);
++  SBUF='D';SBUF='O';SBUF='N';SBUF='E';SBUF='\n';
++  for(;;){}
++}
+diff --git a/src/mcs251/tests/cpp100-regressions.c b/src/mcs251/tests/cpp100-regressions.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..58a89a5adcfaecb5539eb1060f6fc03e2b418adf
+--- /dev/null
++++ b/src/mcs251/tests/cpp100-regressions.c
+@@ -0,0 +1,48 @@
++/* Reduced native-C reproductions from cpp100 cases 14, 23 and 46. */
++#include <stdint.h>
++__sfr __at(0x99) SBUF;
++static inline uint32_t add(uint32_t a,uint32_t b){uint32_t r=a+b;return r;}
++static inline uint32_t mul(uint32_t a,uint32_t b){uint32_t r=a*b;return r;}
++static volatile uint32_t input;
++
++#if TEST == 14
++static uint32_t test(uint32_t x) {
++  int32_t a=(int32_t)x;
++  return add(add(add((uint32_t)(unsigned char)(a<0),
++    mul(2,(uint32_t)(unsigned char)(a>-257L))),
++    mul(4,(uint32_t)(unsigned char)(a==255))),
++    mul(8,(uint32_t)(unsigned char)(a<=32767)));
++}
++#elif TEST == 23
++static inline uint16_t add16(uint16_t a,uint16_t b){uint16_t r=a+b;return r;}
++static inline uint16_t and16(uint16_t a,uint16_t b){uint16_t r=a&b;return r;}
++static uint32_t test(uint32_t x) {
++  uint32_t _2,_3,_7,_10,_11,_13;
++  uint16_t _4,_5,_6,_8,_9,_12;
++  _2=x;_3=0;_4=0;goto _14;
++  do {
++_14:_5=_4;if(_5<32)goto _15;else goto _16;
++_15:_6=_4;_7=_2;if((uint32_t)_6==add(_7&15,16))goto _17;else goto _18;
++_18:_8=_4;if(and16(_8,1)!=0)goto _19;else goto _20;
++_20:_9=_4;_10=_2;_11=_3;_3=add(_11,mul((uint32_t)_9,_10));goto _21;
++_19:goto _21;
++_21:_12=_4;_4=add16(_12,1);goto _14;
++  }while(1);
++_17:goto _16;
++_16:_13=_3;return _13;
++}
++#elif TEST == 46
++struct P{uint32_t a;uint16_t b;uint8_t c;};
++static struct P make(uint32_t x) {
++  struct P result;struct P*p=&result;
++  p->a=x^17;p->b=(uint16_t)(x>>8);p->c=(uint8_t)x;return result;
++}
++static uint32_t test(uint32_t x) {
++  struct P p=make(x);uint32_t a=p.a;uint16_t b=p.b;uint8_t c=p.c;
++  return add(add(a,mul((uint32_t)b,257)),(uint32_t)c);
++}
++#endif
++static const uint32_t values[]={0,1,2,3,7,15,31,127,255,256,257,65535,65536,
++  0x7fffffffUL,0x80000000UL,0xffffffffUL,0x12345678UL,0x89abcdefUL,0x01020304UL,0xffff0001UL};
++static void hex(uint32_t x){uint8_t i;for(i=0;i<8;++i){uint8_t b=x>>28;SBUF=b<10?'0'+b:'A'+b-10;x<<=4;}SBUF='\n';}
++void main(void){uint8_t i;for(i=0;i<20;++i){input=values[i];hex(test(input));}SBUF='D';SBUF='O';SBUF='N';SBUF='E';SBUF='\n';for(;;){}}
+diff --git a/src/mcs251/tests/cppopt-assign-overlap.c b/src/mcs251/tests/cppopt-assign-overlap.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e247f24c69caa1d7e5384894f6c92281813dc2b0
+--- /dev/null
++++ b/src/mcs251/tests/cppopt-assign-overlap.c
+@@ -0,0 +1,89 @@
++#include <stdint.h>
++#include <string.h>
++typedef unsigned char bool;
++#define __forceinline inline
++struct l_array_33_uint8_t { uint8_t array[33]; };
++typedef uint32_t l_fptr_12(void*,void*,uint32_t);
++
++
++static __forceinline uint8_t llvm_select_u8(bool condition, uint8_t iftrue, uint8_t ifnot) {
++  uint8_t r = condition ? iftrue : ifnot;
++  return r;
++}
++
++static __forceinline uint8_t llvm_add_u8(uint8_t a, uint8_t b) {
++  uint8_t r = a + b;
++  return r;
++}
++
++static __forceinline uint32_t llvm_sub_u32(uint32_t a, uint32_t b) {
++  uint32_t r = a - b;
++  return r;
++}
++
++static __forceinline uint32_t llvm_mul_u32(uint32_t a, uint32_t b) {
++  uint32_t r = a * b;
++  return r;
++}
++
++static __forceinline uint32_t llvm_udiv_u32(uint32_t a, uint32_t b) {
++  uint32_t r = a / b;
++  return r;
++}
++
++static __forceinline uint8_t llvm_or_u8(uint8_t a, uint8_t b) {
++  uint8_t r = a | b;
++  return r;
++}
++
++uint32_t format_u32(void* _194, uint32_t _195, uint8_t _196) {
++  struct l_array_33_uint8_t _197;    /* Address-exposed local */
++  void* _198;
++  uint32_t _199;
++  void* _200;
++  void* _200__PHI_TEMPORARY;
++  uint32_t _201;
++  uint32_t _201__PHI_TEMPORARY;
++  uint32_t _202;
++  uint32_t _203;
++  uint32_t _204;
++  uint8_t _205;
++  void* _206;
++  uint32_t _207;
++  void* _208;
++  void* _209;
++  uint32_t _210;
++
++  _198 = ((&((uint8_t*)(&_197))[((signed _BitInt(24))32)]));
++  *(uint8_t*)_198 = 0;
++  _199 = ((uint32_t)(uint8_t)(llvm_select_u8((((uint8_t)(llvm_add_u8(_196, -37))) < ((uint8_t)((uint8_t)-35))), 10, _196)));
++  _200__PHI_TEMPORARY = _198;   /* for PHI node */
++  _201__PHI_TEMPORARY = _195;   /* for PHI node */
++  goto _211;
++
++  do {     /* Syntactic loop '' to make GCC happy */
++_211:
++  _200 = _200__PHI_TEMPORARY;
++  _201 = _201__PHI_TEMPORARY;
++  _202 = _201;
++  _203 = llvm_udiv_u32(_202, _199);
++  _204 = llvm_sub_u32(_202, (llvm_mul_u32(_203, _199)));
++  _205 = ((uint8_t)_204);
++  _206 = ((&((uint8_t*)_200)[((signed _BitInt(24))-1)]));
++  *(uint8_t*)_206 = (llvm_select_u8((((uint32_t)_204) < ((uint32_t)10u)), (llvm_or_u8(_205, 48)), (llvm_add_u8(_205, 55))));
++  if ((((uint32_t)_201) < ((uint32_t)_199))) {
++    goto _212;
++  } else {
++    _200__PHI_TEMPORARY = _206;   /* for PHI node */
++    _201__PHI_TEMPORARY = _203;   /* for PHI node */
++    goto _211;
++  }
++
++  } while (1); /* end of syntactic loop '' */
++_212:
++  _207 = strlen(_206);
++  _208 = *(void**)_194;
++  _209 = *(void**)(((uint8_t*)_208) + (((signed _BitInt(24))3)));
++  _210 = ((l_fptr_12*)(void*)_209)(_194, _206, _207);
++  return _210;
++}
+diff --git a/src/mcs251/tests/cppopt-check.py b/src/mcs251/tests/cppopt-check.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..2c76de88a118322b05e77525877ce7dcc1df64d4
+--- /dev/null
++++ b/src/mcs251/tests/cppopt-check.py
+@@ -0,0 +1,49 @@
++#!/usr/bin/env python3
++"""Compile and execute the optimized Print register-copy regression."""
++import argparse,hashlib,json,os,selectors,subprocess,time
++from pathlib import Path
++p=argparse.ArgumentParser(description=__doc__)
++p.add_argument('--sdcc',required=True);p.add_argument('--qemu',required=True);p.add_argument('--work',type=Path,required=True)
++a=p.parse_args();a.work.mkdir(parents=True,exist_ok=True)
++source=Path(__file__).with_name('cppopt-assign-overlap.c')
++inputs=[0,1,2,3,7,15,31,127,255,256,257,65535,65536,0x7fffffff,0x80000000,0xffffffff,0x12345678,0x89abcdef,0x01020304,0xffff0001]
++calls=[];expected=[]
++for base in [2,8,10,16,36]:
++    for n in inputs:
++        calls.append('format_u32(&table,0x%xUL,%d);'%(n,base))
++        value=n;s=''
++        while True:
++            s='0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ'[value%base]+s;value//=base
++            if not value:break
++        expected.append(s)
++main='''#include <stdint.h>
++__sfr __at(0x99) SBUF;
++extern uint32_t format_u32(void*,uint32_t,uint8_t);
++static uint32_t emit(void* self,void* value,uint32_t length){uint32_t i;for(i=0;i<length;++i)SBUF=((char*)value)[i];SBUF='\\n';return length;}
++static void* vtable[2]={0,(void*)emit};
++static void* table=vtable;
++void main(void){%s SBUF='D';SBUF='O';SBUF='N';SBUF='E';SBUF='\\n';for(;;){}}
++'''%'\n'.join(calls)
++(a.work/'main.c').write_text(main)
++flags=['-mmcs251','--model-large','--stack-auto','--std-sdcc11','--nogcse','--opt-code-size']
++for label,cmd in [('compile',[a.sdcc,*flags,'-c',str(source),'-o',str(a.work/'case.rel')]),('link',[a.sdcc,*flags,'--code-loc','0xff0000','--no-xinit-opt',str(a.work/'main.c'),str(a.work/'case.rel'),'-o',str(a.work/'image.hex')])]:
++    result=subprocess.run(cmd,capture_output=True,text=True)
++    (a.work/(label+'.log')).write_text(result.stdout+result.stderr)
++    if result.returncode:raise SystemExit(result.returncode)
++command=[a.qemu,'-M','stc32g144k246','-bios',str(a.work/'image.hex'),'-accel','tcg','-icount','shift=0,align=off,sleep=off','-display','none','-monitor','none','-serial','stdio']
++process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
++selector=selectors.DefaultSelector();selector.register(process.stdout,selectors.EVENT_READ);raw=b'';start=time.monotonic()
++try:
++    while time.monotonic()-start<20:
++        if not selector.select(.1):continue
++        data=os.read(process.stdout.fileno(),65536)
++        if not data:break
++        raw+=data
++        if b'DONE\n' in raw:break
++finally:
++    selector.close();process.terminate();process.wait(timeout=2)
++(a.work/'qemu.txt').write_bytes(raw)
++oracle='\n'.join(expected+['DONE'])+'\n';(a.work/'expected.txt').write_text(oracle)
++result={'status':'PASS' if raw.decode()==oracle else 'FAIL','comparisons':len(expected),'firmware_sha256':hashlib.sha256((a.work/'image.hex').read_bytes()).hexdigest(),'command':command}
++(a.work/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
++raise SystemExit(int(result['status']!='PASS'))
 diff --git a/src/mcs251/tests/elf-output-probe.c b/src/mcs251/tests/elf-output-probe.c
-index 104f1a3cc..06c108cf3 100644
+index 104f1a3cc34eee2a11fb306061b688e74b7c9ea6..06c108cf339288b07716f61cf6aa86b606afc5aa 100644
 --- a/src/mcs251/tests/elf-output-probe.c
 +++ b/src/mcs251/tests/elf-output-probe.c
 @@ -13,4 +13,4 @@ int
@@ -4108,7 +5399,7 @@ index 104f1a3cc..06c108cf3 100644
 +}
 diff --git a/src/mcs251/tests/far-symbol-dptr-cache-runtime.c b/src/mcs251/tests/far-symbol-dptr-cache-runtime.c
 new file mode 100644
-index 000000000..ee4303752
+index 0000000000000000000000000000000000000000..ee4303752573349d81fa5ea2d50c757fc5fa8dea
 --- /dev/null
 +++ b/src/mcs251/tests/far-symbol-dptr-cache-runtime.c
 @@ -0,0 +1,60 @@
@@ -4174,7 +5465,7 @@ index 000000000..ee4303752
 +}
 diff --git a/src/mcs251/tests/generic-address-roundtrip-runtime.c b/src/mcs251/tests/generic-address-roundtrip-runtime.c
 new file mode 100644
-index 000000000..3f5d08222
+index 0000000000000000000000000000000000000000..3f5d082227a6bce46447e778fcf3b187500d0f90
 --- /dev/null
 +++ b/src/mcs251/tests/generic-address-roundtrip-runtime.c
 @@ -0,0 +1,156 @@
@@ -4335,7 +5626,7 @@ index 000000000..3f5d08222
 +    }
 +}
 diff --git a/src/mcs251/tests/gnu-case-ranges.c b/src/mcs251/tests/gnu-case-ranges.c
-index 678e1d654..e60a86cfc 100644
+index 678e1d654a647facf5b771f6d9b26e86c15b0853..e60a86cfcdad4c1a2b819d4141234a02e4a62e55 100644
 --- a/src/mcs251/tests/gnu-case-ranges.c
 +++ b/src/mcs251/tests/gnu-case-ranges.c
 @@ -25,4 +25,4 @@ mcs251_gnu_case_range (unsigned char value)
@@ -4346,7 +5637,7 @@ index 678e1d654..e60a86cfc 100644
 \ No newline at end of file
 +}
 diff --git a/src/mcs251/tests/gnu-extension-keyword.c b/src/mcs251/tests/gnu-extension-keyword.c
-index b315986e2..5c8fa58d9 100644
+index b315986e213450886ec9674560e17a143c6f0d0d..5c8fa58d9b8924ec207b7da3766dfb988e53720e 100644
 --- a/src/mcs251/tests/gnu-extension-keyword.c
 +++ b/src/mcs251/tests/gnu-extension-keyword.c
 @@ -12,4 +12,4 @@ mcs251_extension_probe (unsigned char value)
@@ -4358,7 +5649,7 @@ index b315986e2..5c8fa58d9 100644
 +}
 diff --git a/src/mcs251/tests/heap-size-abi-consumer.c b/src/mcs251/tests/heap-size-abi-consumer.c
 new file mode 100644
-index 000000000..a2cbd6697
+index 0000000000000000000000000000000000000000..a2cbd66976aa95209d0259c2f4540bbe73ea2c69
 --- /dev/null
 +++ b/src/mcs251/tests/heap-size-abi-consumer.c
 @@ -0,0 +1,80 @@
@@ -4444,7 +5735,7 @@ index 000000000..a2cbd6697
 +}
 diff --git a/src/mcs251/tests/legacy-heap-object.c b/src/mcs251/tests/legacy-heap-object.c
 new file mode 100644
-index 000000000..2a0d0d083
+index 0000000000000000000000000000000000000000..2a0d0d083d3850e47c00623d2a54676d53aa3972
 --- /dev/null
 +++ b/src/mcs251/tests/legacy-heap-object.c
 @@ -0,0 +1,5 @@
@@ -4455,7 +5746,7 @@ index 000000000..2a0d0d083
 +const unsigned int __sdcc_heap_size = sizeof (__sdcc_heap);
 diff --git a/src/mcs251/tests/malloc-exhaustion-runtime.c b/src/mcs251/tests/malloc-exhaustion-runtime.c
 new file mode 100644
-index 000000000..53f7d946e
+index 0000000000000000000000000000000000000000..53f7d946e85864ef6b886a8d1a46862b29d89e70
 --- /dev/null
 +++ b/src/mcs251/tests/malloc-exhaustion-runtime.c
 @@ -0,0 +1,142 @@
@@ -4603,7 +5894,7 @@ index 000000000..53f7d946e
 +}
 diff --git a/src/mcs251/tests/mixed-width-arithmetic-runtime.c b/src/mcs251/tests/mixed-width-arithmetic-runtime.c
 new file mode 100644
-index 000000000..b7ba6ca69
+index 0000000000000000000000000000000000000000..b7ba6ca694d57c6e9f8f87fd04e300fa2d5ee255
 --- /dev/null
 +++ b/src/mcs251/tests/mixed-width-arithmetic-runtime.c
 @@ -0,0 +1,195 @@
@@ -4804,7 +6095,7 @@ index 000000000..b7ba6ca69
 +}
 diff --git a/src/mcs251/tests/pcall-dptr-cache-runtime.c b/src/mcs251/tests/pcall-dptr-cache-runtime.c
 new file mode 100644
-index 000000000..4296dd580
+index 0000000000000000000000000000000000000000..4296dd580821561ceddbbf653f32671aba7c8bbe
 --- /dev/null
 +++ b/src/mcs251/tests/pcall-dptr-cache-runtime.c
 @@ -0,0 +1,69 @@
@@ -4879,7 +6170,7 @@ index 000000000..4296dd580
 +}
 diff --git a/src/mcs251/tests/pointer-difference-runtime.c b/src/mcs251/tests/pointer-difference-runtime.c
 new file mode 100644
-index 000000000..adc19529f
+index 0000000000000000000000000000000000000000..adc19529f7026397937fd616673a7c1f2efa0fb0
 --- /dev/null
 +++ b/src/mcs251/tests/pointer-difference-runtime.c
 @@ -0,0 +1,132 @@
@@ -5017,7 +6308,7 @@ index 000000000..adc19529f
 +}
 diff --git a/src/mcs251/tests/printf-pointer-runtime.c b/src/mcs251/tests/printf-pointer-runtime.c
 new file mode 100644
-index 000000000..9391c7e4f
+index 0000000000000000000000000000000000000000..9391c7e4fe8ff11a606aa6c13dc57d9d284dd6a7
 --- /dev/null
 +++ b/src/mcs251/tests/printf-pointer-runtime.c
 @@ -0,0 +1,32 @@
@@ -5055,7 +6346,7 @@ index 000000000..9391c7e4f
 +}
 diff --git a/src/mcs251/tests/rematerialized-address-offsets.c b/src/mcs251/tests/rematerialized-address-offsets.c
 new file mode 100644
-index 000000000..f68ad06ce
+index 0000000000000000000000000000000000000000..f68ad06cee64baa2fc82a40e649927f9e5d87fb0
 --- /dev/null
 +++ b/src/mcs251/tests/rematerialized-address-offsets.c
 @@ -0,0 +1,10 @@
@@ -5069,12 +6360,55 @@ index 000000000..f68ad06ce
 +{
 +    return &remat_storage[70000UL];
 +}
+diff --git a/src/mcs251/tests/runtime-main.c b/src/mcs251/tests/runtime-main.c
+index 05949194d1b65a39a9a3ede5280c9c032304aa65..269aae28c2748adc177fab1a21eb7310051716b3 100644
+--- a/src/mcs251/tests/runtime-main.c
++++ b/src/mcs251/tests/runtime-main.c
+@@ -3,6 +3,9 @@
+ 
+ __sfr __at (0x99) SBUF;
+ __xdata __at (0x010020) volatile unsigned char high_data;
++static volatile __data unsigned char gptr_helper_result;
++static volatile __data unsigned char gptr_helper_flash_result;
++static const __code unsigned char gptr_helper_flash = 0x97;
+ 
+ struct mcs251_index_pair
+ {
+@@ -139,7 +142,27 @@ main (void)
+ #ifndef MCS251_SKIP_SETJMP
+     int resumed;
+ #endif
+-    unsigned char passed = 1;
++    unsigned char passed;
++
++    /* New MCS251 code emits flat byte accesses directly, but precompiled
++       objects still use these runtime entry points. Exercise their DPX/A
++       ABI explicitly so rebuilding libc cannot silently remove coverage. */
++    __asm
++        .globl __gptrput
++        .globl __gptrget
++        mov dptr,#_high_data
++        mov dpxl,#(_high_data >> 16)
++        mov a,#0x69
++        ecall __gptrput
++        ecall __gptrget
++        mov _gptr_helper_result,a
++        mov dptr,#_gptr_helper_flash
++        mov dpxl,#(_gptr_helper_flash >> 16)
++        ecall __gptrget
++        mov _gptr_helper_flash_result,a
++    __endasm;
++    passed = high_data == 0x69 && gptr_helper_result == 0x69 &&
++             gptr_helper_flash_result == 0x97;
+ 
+     middle_pair = &indexed_pairs[20];
+     middle_pair[relative_index].second = 0x5a;
 diff --git a/src/mcs251/tests/stack-word-peephole.c b/src/mcs251/tests/stack-word-peephole.c
 new file mode 100644
-index 000000000..8eb63ea68
+index 0000000000000000000000000000000000000000..cb8212607d3a189a9e6cd51d46220bfa5ba288eb
 --- /dev/null
 +++ b/src/mcs251/tests/stack-word-peephole.c
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,139 @@
 +/* Stable assembly probes for the MCS251 hardware-stack word peepholes.
 +   The optimizer must compare the complete hexadecimal displacements. */
 +
@@ -5209,12 +6543,14 @@ index 000000000..8eb63ea68
 +        mov     @spx-0x003f,a
 +        mov     a,r4
 +        mov     @spx-0x0040,a
++        xrl     a,#0x5a
++        mov     dpl,a
 +        eret
 +    __endasm;
 +}
 diff --git a/support/tests/README.md b/support/tests/README.md
 new file mode 100644
-index 000000000..ca9555586
+index 0000000000000000000000000000000000000000..ca95555867b4cb3d07dc5500ac2a09b86c803249
 --- /dev/null
 +++ b/support/tests/README.md
 @@ -0,0 +1,22 @@
@@ -5242,7 +6578,7 @@ index 000000000..ca9555586
 +code and do not establish the cause of any separate hardware symptom.
 diff --git a/support/tests/check-mcs251-dr-immediate.py b/support/tests/check-mcs251-dr-immediate.py
 new file mode 100644
-index 000000000..40f241038
+index 0000000000000000000000000000000000000000..40f241038a8e22217a8c02afdc9e83ff84cdf30a
 --- /dev/null
 +++ b/support/tests/check-mcs251-dr-immediate.py
 @@ -0,0 +1,89 @@
@@ -5337,7 +6673,7 @@ index 000000000..40f241038
 +    main()
 diff --git a/support/tests/check-mcs251-near-store.py b/support/tests/check-mcs251-near-store.py
 new file mode 100644
-index 000000000..ecea569da
+index 0000000000000000000000000000000000000000..ecea569da325281cd0f300ae408bcc988c7aeae3
 --- /dev/null
 +++ b/support/tests/check-mcs251-near-store.py
 @@ -0,0 +1,33 @@
@@ -5376,7 +6712,7 @@ index 000000000..ecea569da
 +    main()
 diff --git a/support/tests/compiler-audit/check-large-objects.py b/support/tests/compiler-audit/check-large-objects.py
 new file mode 100644
-index 000000000..c8602f755
+index 0000000000000000000000000000000000000000..c8602f7557394ebd008a9ba5da5f166c25cf376e
 --- /dev/null
 +++ b/support/tests/compiler-audit/check-large-objects.py
 @@ -0,0 +1,78 @@
@@ -5460,7 +6796,7 @@ index 000000000..c8602f755
 +    main()
 diff --git a/support/tests/compiler-audit/check-runtime-build-gate.py b/support/tests/compiler-audit/check-runtime-build-gate.py
 new file mode 100644
-index 000000000..c01cf6bf1
+index 0000000000000000000000000000000000000000..c01cf6bf13b4b01af4f075bb13cb4a0c1799edee
 --- /dev/null
 +++ b/support/tests/compiler-audit/check-runtime-build-gate.py
 @@ -0,0 +1,30 @@
@@ -5496,7 +6832,7 @@ index 000000000..c01cf6bf1
 +    main()
 diff --git a/support/tests/compiler-audit/check-section-identity.py b/support/tests/compiler-audit/check-section-identity.py
 new file mode 100644
-index 000000000..28c484fe9
+index 0000000000000000000000000000000000000000..28c484fe9d6378fc68af7e7f5b8c9084923d1cab
 --- /dev/null
 +++ b/support/tests/compiler-audit/check-section-identity.py
 @@ -0,0 +1,59 @@
@@ -5561,7 +6897,7 @@ index 000000000..28c484fe9
 +    main()
 diff --git a/support/tests/compiler-audit/large-objects.c b/support/tests/compiler-audit/large-objects.c
 new file mode 100644
-index 000000000..eab9cbb28
+index 0000000000000000000000000000000000000000..eab9cbb28d452d150859350a53c80fd99c4a3706
 --- /dev/null
 +++ b/support/tests/compiler-audit/large-objects.c
 @@ -0,0 +1,22 @@
@@ -5589,7 +6925,7 @@ index 000000000..eab9cbb28
 +}
 diff --git a/support/tests/full-flash/README.md b/support/tests/full-flash/README.md
 new file mode 100644
-index 000000000..55859b9d1
+index 0000000000000000000000000000000000000000..55859b9d1d3385f11dc4055d8a57c7ddcf6ef545
 --- /dev/null
 +++ b/support/tests/full-flash/README.md
 @@ -0,0 +1,45 @@
@@ -5640,7 +6976,7 @@ index 000000000..55859b9d1
 +without downloading the emulator.
 diff --git a/support/tests/full-flash/full-flash.c b/support/tests/full-flash/full-flash.c
 new file mode 100644
-index 000000000..99aa27147
+index 0000000000000000000000000000000000000000..99aa271476af7d3c8561f9faebd1a8138c122a6a
 --- /dev/null
 +++ b/support/tests/full-flash/full-flash.c
 @@ -0,0 +1,264 @@
@@ -5910,7 +7246,7 @@ index 000000000..99aa27147
 +}
 diff --git a/support/tests/full-flash/legacy-probe.c b/support/tests/full-flash/legacy-probe.c
 new file mode 100644
-index 000000000..7dbe331bf
+index 0000000000000000000000000000000000000000..7dbe331bf4be9ec4f20ce25cc93e647940415699
 --- /dev/null
 +++ b/support/tests/full-flash/legacy-probe.c
 @@ -0,0 +1,43 @@
@@ -5959,7 +7295,7 @@ index 000000000..7dbe331bf
 +}
 diff --git a/support/tests/full-flash/run-full-flash.py b/support/tests/full-flash/run-full-flash.py
 new file mode 100644
-index 000000000..610192801
+index 0000000000000000000000000000000000000000..610192801203194369f050bce7a3e6a14e2f565f
 --- /dev/null
 +++ b/support/tests/full-flash/run-full-flash.py
 @@ -0,0 +1,987 @@
@@ -6952,7 +8288,7 @@ index 000000000..610192801
 +        raise SystemExit(1)
 diff --git a/support/tests/mcs251-near-store.c b/support/tests/mcs251-near-store.c
 new file mode 100644
-index 000000000..b4b505f5f
+index 0000000000000000000000000000000000000000..b4b505f5f02c636decb6b9061ee69089f75c4698
 --- /dev/null
 +++ b/support/tests/mcs251-near-store.c
 @@ -0,0 +1,30 @@
@@ -6987,7 +8323,7 @@ index 000000000..b4b505f5f
 +    }
 +}
 diff --git a/support/valdiag/Makefile.in b/support/valdiag/Makefile.in
-index 8cd41a51d..ae821ba34 100644
+index 8cd41a51d321e9b12b57fde1b9b1c07f3c209f29..ae821ba34e82d9bc15c6eb6c87fccd1180ec8e35 100644
 --- a/support/valdiag/Makefile.in
 +++ b/support/valdiag/Makefile.in
 @@ -47,7 +47,7 @@ clean-gen:
@@ -7000,7 +8336,7 @@ index 8cd41a51d..ae821ba34 100644
  	grep FAIL $@ ; true
  	cat $@ | $(PYTHON) $(srcdir)/../regression/compact-results.py $*.c
 diff --git a/support/valdiag/valdiag.py b/support/valdiag/valdiag.py
-index ac4bf727a..63ed34642 100644
+index ac4bf727aa07cfb3a1986bd0e7acf28e3799699c..63ed34642f055428a31e1c0f9540abfd5fa364f1 100644
 --- a/support/valdiag/valdiag.py
 +++ b/support/valdiag/valdiag.py
 @@ -504,3 +504,6 @@ for testname in list(testcases.keys()):

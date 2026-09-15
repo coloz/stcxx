@@ -144,12 +144,14 @@ class QTestClient:
 
 
 @contextmanager
-def qemu_session(qemu, machine, image, socket_dir, name, with_qtest=False):
+def qemu_session(qemu, machine, image, socket_dir, name, with_qtest=False, *, icount_shift=0):
+    if not 0 <= icount_shift <= 10:
+        raise ValueError('icount_shift must be in 0..10')
     uart_path = str(socket_dir / f"{name}.uart.sock")
     # Keep timer-backed peripheral cases independent of host scheduling.
     command = [
         str(qemu), "-M", machine, "-bios", str(image),
-        "-accel", "tcg", "-icount", "shift=0,align=off,sleep=off",
+        "-accel", "tcg", "-icount", f"shift={icount_shift},align=off,sleep=off",
         "-display", "none", "-monitor", "none",
         "-chardev", f"socket,id=uart,path={uart_path},server=on,wait=on",
         "-serial", "chardev:uart",

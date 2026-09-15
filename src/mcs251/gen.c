@@ -983,7 +983,7 @@ genPointerPush (iCode *ic)
           loadFarPointerByte (TRUE);
           break;
         case GPOINTER:
-          emitcode (RUNTIME_CALL, "__gptrget");
+          loadFarPointerByte (FALSE);
           break;
         default:
           wassert (0);
@@ -2738,7 +2738,7 @@ genRet (iCode *ic)
                   emitAccumulatorExchange (tempRegs[2]->name);
                   emitcode ("xch", "a,dpxl");
                   emitAccumulatorExchange (tempRegs[2]->name);
-                  emitcode (RUNTIME_CALL, "__gptrput");
+                  storeFarPointerByte ();
                   if (i + 1 < size)
                     {
                       incrementFarPointer ();
@@ -2793,7 +2793,7 @@ genRet (iCode *ic)
                       emitcode ("mov", "dpxl,a");
                     }
                   emitpop ("acc");
-                  emitcode (RUNTIME_CALL, "__gptrput");
+                  storeFarPointerByte ();
                   emitpop ("dpxl");
                   emitpop ("dph");
                   emitpop ("dpl");
@@ -2832,7 +2832,7 @@ genRet (iCode *ic)
           for (int i = 0; i < size; i++)
             {
               MOVA (opGet (IC_LEFT (ic), i, false, false));
-              emitcode (RUNTIME_CALL, "__gptrput");
+              storeFarPointerByte ();
               if (i + 1 < size)
                 incrementFarPointer ();
             }
@@ -3242,6 +3242,7 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
 {
   const char *resultDword;
   bool preserveDword;
+  bool resultUsesScratch[16] = {false};
   int offset;
 
   if (AOP_SIZE (left) != 2 || AOP_SIZE (right) != 2 ||
@@ -3252,6 +3253,16 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
 
   resultDword = mcs251DwordForNativeTuple (AOP (result));
   preserveDword = !resultDword || strcmp (resultDword, "dr12");
+
+  /* Partial scratch/result overlap needs a parallel copy and must not be
+     overwritten by the later scratch restore. */
+  if (AOP_TYPE (result) == AOP_REG)
+    for (offset = 0; offset < 4; ++offset)
+      {
+        int reg = AOP (result)->aopu.aop_reg[offset]->offset;
+        if (reg >= 0 && reg < 16)
+          resultUsesScratch[reg] = true;
+      }
 
   emitpush ("r8");
   emitpush ("r9");
@@ -3280,20 +3291,25 @@ mcs251GenUnsignedWordMultiply (operand *left, operand *right,
   emitpop ("r13");
   emitcode ("mul", "wr12,wr8");
 
-  opPut (result, "r15", 0);
-  opPut (result, "r14", 1);
-  opPut (result, "r13", 2);
-  opPut (result, "r12", 3);
-
   if (preserveDword)
     {
-      emitpop ("r15");
-      emitpop ("r14");
-      emitpop ("r13");
-      emitpop ("r12");
+      /* Stage all four bytes before assigning any destination byte. */
+      emitpush ("r12");
+      emitpush ("r13");
+      emitpush ("r14");
+      emitpush ("r15");
+      for (offset = 0; offset < 4; ++offset)
+        {
+          emitpop ("acc");
+          opPut (result, "a", offset);
+        }
+      emitpop (resultUsesScratch[15] ? "acc" : "r15");
+      emitpop (resultUsesScratch[14] ? "acc" : "r14");
+      emitpop (resultUsesScratch[13] ? "acc" : "r13");
+      emitpop (resultUsesScratch[12] ? "acc" : "r12");
     }
-  emitpop ("r9");
-  emitpop ("r8");
+  emitpop (resultUsesScratch[9] ? "acc" : "r9");
+  emitpop (resultUsesScratch[8] ? "acc" : "r8");
 
   return TRUE;
 }
@@ -9020,7 +9036,10 @@ emitPtrByteGet (const char *rname, int p_type, bool preserveAinB)
           emitpush ("b");
           emitpush ("acc");
         }
-      emitcode (RUNTIME_CALL, "__gptrget");
+      /* Generic MCS251 pointers are flat 24-bit addresses. The runtime
+         helper performs this same load followed by a return; emit the
+         access here without adding a call frame for every byte. */
+      loadFarPointerByte (FALSE);
       if (preserveAinB)
         emitpop ("b");
       break;
@@ -9059,7 +9078,7 @@ emitPtrByteSet (const char *rname, int p_type, const char *src)
 
     case GPOINTER:
       MOVA (src);
-      emitcode (RUNTIME_CALL, "__gptrput");
+      storeFarPointerByte ();
       break;
     }
 }
@@ -9743,7 +9762,7 @@ genGenPointerGet (operand * left, operand * result, iCode * ic, iCode * pi, iCod
           int logicalOffset = mcs251PointerByteOffset (
             operandType (result), offset, AOP_SIZE (result));
 
-          emitcode (RUNTIME_CALL, "__gptrget");
+          loadFarPointerByte (FALSE);
           if (!ifx)
             {
               if (mcs251FarResult)
@@ -10477,7 +10496,7 @@ genGenPointerSet (operand * right, operand * result, iCode * ic, iCode * pi)
           else
             MOVA (opGet (right, logicalOffset, FALSE, FALSE));
           offset++;
-          emitcode (RUNTIME_CALL, "__gptrput");
+          storeFarPointerByte ();
           if (size || pi)
             {
               incrementFarPointer ();
@@ -10744,11 +10763,13 @@ genFarFarAssign (operand * result, operand * right, iCode * ic)
 /*-----------------------------------------------------------------*/
 /* genAssign - generate code for assignment                        */
 /*-----------------------------------------------------------------*/
+static void mcs251CopyPlainBytes (operand *result, operand *right, int size);
+
 static void
 genAssign (iCode * ic)
 {
   operand *result, *right;
-  int size, offset;
+  int size;
 
   D (emitcode (";", "genAssign"));
 
@@ -10807,18 +10828,9 @@ genAssign (iCode * ic)
     }
   else
     {
-      offset = 0;
-      while (size--)
-        {
-          // Check for overwriting of result.
-          if (result->aop->type == AOP_REG && right->aop->type == AOP_REG)
-            for (int i = 0; i < offset; i++)
-              if (result->aop->aopu.aop_reg[i]->rIdx == right->aop->aopu.aop_reg[offset]->rIdx)
-                wassert (0);
-
-          opPut(result, opGet (right, offset, FALSE, FALSE), offset);
-          offset++;
-        }
+      /* Register allocation may permute a live generic-pointer tuple after
+         an indirect call. Use the same parallel-copy path as genCast. */
+      mcs251CopyPlainBytes (result, right, size);
     }
   adjustArithmeticResult (ic);
 

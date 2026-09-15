@@ -90,6 +90,7 @@ def check_rule_definitions(rule_text):
             rf"mov\s+r{low},a\s*"
             rf"\}}\s*by\s*\{{\s*"
             rf"mov\s+wr{low},@spx-%2\s*"
+            rf"mov\s+a,r{low}\s*"
             rf"\}}\s*if\s+inSequence\('1'\s+%1\s+%2\)",
             re.IGNORECASE,
         )
@@ -101,6 +102,7 @@ def check_rule_definitions(rule_text):
             rf"mov\s+@spx-%2,a\s*"
             rf"\}}\s*by\s*\{{\s*"
             rf"mov\s+@spx-%2,wr{low}\s*"
+            rf"mov\s+a,r{low}\s*"
             rf"\}}\s*if\s+inSequence\('1'\s+%1\s+%2\)",
             re.IGNORECASE,
         )
@@ -259,6 +261,16 @@ def main():
             "unfolded true WR4 byte-load sequence",
         )
         true_store = function_body(probe_text, "true_store_wr4")
+        require_instruction_sequence(
+            true_load,
+            (r"mov\s+wr4,@spx-0x0040", r"mov\s+a,r4", r"xrl\s+a,#0x5a"),
+            "stack load preserves live accumulator",
+        )
+        require_instruction_sequence(
+            true_store,
+            (r"mov\s+@spx-0x0040,wr4", r"mov\s+a,r4", r"xrl\s+a,#0x5a"),
+            "stack store preserves live accumulator",
+        )
         require_instruction(
             true_store,
             r"mov\s+@spx-0x0040,wr4",

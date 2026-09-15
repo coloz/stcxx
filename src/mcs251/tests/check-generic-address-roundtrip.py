@@ -66,14 +66,16 @@ def check_lane(sdcc, source, workspace, lane, port, stack_auto):
         lane,
         ("generic_load_redundant", "generic_load_canonical"),
         "genGenPointerGet",
-        r"\b__gptrget\b",
+        (r"^[ \t]*mov[ \t]+a,@dpx[ \t]*$" if port == "mcs251"
+         else r"\b__gptrget\b"),
     )
     require_path(
         assembly,
         lane,
         ("generic_store_redundant", "generic_store_canonical"),
         "genGenPointerSet",
-        r"\b__gptrput\b",
+        (r"^[ \t]*mov[ \t]+@dpx,a[ \t]*$" if port == "mcs251"
+         else r"\b__gptrput\b"),
     )
 
     if port == "mcs251":

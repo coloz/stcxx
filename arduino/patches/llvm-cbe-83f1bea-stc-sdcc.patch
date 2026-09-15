@@ -1,8 +1,33 @@
 diff --git a/lib/Target/CBackend/CBackend.cpp b/lib/Target/CBackend/CBackend.cpp
-index f0056bc..a5058b9 100644
+index f0056bc..09aecc5 100644
 --- a/lib/Target/CBackend/CBackend.cpp
 +++ b/lib/Target/CBackend/CBackend.cpp
-@@ -291,7 +291,12 @@ raw_ostream &CWriter::printTypeString(raw_ostream &Out, Type *Ty,
+@@ -24,6 +24,7 @@
+ #include "llvm/Support/Debug.h"
+ #include "llvm/Support/ErrorHandling.h"
+ #include "llvm/Support/MathExtras.h"
++#include "llvm/Support/KnownBits.h"
+ #include "llvm/TargetParser/Host.h"
+ 
+ #include <algorithm>
+@@ -99,6 +100,16 @@ auto GetParamStructRetType(FunctionInfoVariant FIV) {
+                                   &CallInst::getParamStructRetType, FIV, 0u);
+ }
+ 
++// STC's C bridge is an IR lowering, not a reconstruction of a host C ABI.
++// Keep the caller's sret destination as an explicit parameter: returning a
++// temporary C struct by value moves an object without invoking its C++ move
++// constructor and invalidates self pointers or registered object addresses.
++// Apply the same rule to prototypes, definitions, returns and indirect calls.
++static bool preserveSTCStructReturn(const Module *M) {
++  return M && (M->getTargetTriple() == "msp430-stc-none-eabi" ||
++               M->getTargetTriple() == "msp430-stc51-none-eabi");
++}
++
+ auto GetParamByValType(FunctionInfoVariant FIV, unsigned ArgNo) {
+   return VisitFunctionInfoVariant(&Function::getParamByValType,
+                                   &CallInst::getParamByValType, FIV, ArgNo);
+@@ -291,7 +302,12 @@ raw_ostream &CWriter::printTypeString(raw_ostream &Out, Type *Ty,
    }
  
    if (Ty->isPointerTy()) {
@@ -16,7 +41,7 @@ index f0056bc..a5058b9 100644
    }
  
    switch (Ty->getTypeID()) {
-@@ -520,6 +525,16 @@ raw_ostream &CWriter::printSimpleType(raw_ostream &Out, Type *Ty,
+@@ -520,6 +536,16 @@ raw_ostream &CWriter::printSimpleType(raw_ostream &Out, Type *Ty,
        return Out << (isSigned ? "int8_t" : "uint8_t");
      else if (NumBits <= 16)
        return Out << (isSigned ? "int16_t" : "uint16_t");
@@ -33,7 +58,7 @@ index f0056bc..a5058b9 100644
      else if (NumBits <= 32)
        return Out << (isSigned ? "int32_t" : "uint32_t");
      else if (NumBits <= 64)
-@@ -582,6 +597,11 @@ CWriter::printTypeName(raw_ostream &Out, Type *Ty, bool isSigned,
+@@ -582,6 +608,11 @@ CWriter::printTypeName(raw_ostream &Out, Type *Ty, bool isSigned,
    }
  
    case Type::PointerTyID: {
@@ -45,7 +70,19 @@ index f0056bc..a5058b9 100644
      return Out << "void*";
    }
  
-@@ -1071,6 +1091,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
+@@ -777,8 +808,9 @@ raw_ostream &CWriter::printFunctionProto(raw_ostream &Out,
+     Out << MainArgs.begin()[0].first;
+   } else {
+     // Should this function actually return a struct by-value?
+-    isStructReturn = PAL.hasAttributeAtIndex(1, Attribute::StructRet) ||
+-                     PAL.hasAttributeAtIndex(2, Attribute::StructRet);
++    isStructReturn = !preserveSTCStructReturn(TheModule) &&
++                     (PAL.hasAttributeAtIndex(1, Attribute::StructRet) ||
++                      PAL.hasAttributeAtIndex(2, Attribute::StructRet));
+     // Get the return type for the function.
+     Type *RetTy;
+     if (!isStructReturn)
+@@ -1071,6 +1103,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
    case Instruction::IntToPtr:
    case Instruction::Trunc:
    case Instruction::BitCast:
@@ -53,7 +90,7 @@ index f0056bc..a5058b9 100644
    case Instruction::FPExt:
    case Instruction::FPTrunc: // For these the DstTy sign doesn't matter
      Out << '(';
-@@ -1115,6 +1136,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
+@@ -1115,6 +1148,7 @@ void CWriter::printCast(unsigned opc, Type *SrcTy, Type *DstTy) {
      break;
    case Instruction::Trunc:
    case Instruction::BitCast:
@@ -61,7 +98,7 @@ index f0056bc..a5058b9 100644
    case Instruction::FPExt:
    case Instruction::FPTrunc:
    case Instruction::FPToSI:
-@@ -1136,6 +1158,23 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+@@ -1136,6 +1170,23 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
        errorWithMessage("Unsupported constant type");
      }
      switch (CE->getOpcode()) {
@@ -85,7 +122,7 @@ index f0056bc..a5058b9 100644
      case Instruction::Trunc:
      case Instruction::ZExt:
      case Instruction::SExt:
-@@ -1170,7 +1209,9 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+@@ -1170,7 +1221,9 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
      case Instruction::GetElementPtr:
        Out << "(";
        printGEPExpression(CE->getOperand(0), CPV->getNumOperands(),
@@ -96,7 +133,7 @@ index f0056bc..a5058b9 100644
        Out << ")";
        return;
      case Instruction::Select:
-@@ -1560,7 +1601,13 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
+@@ -1560,7 +1613,13 @@ void CWriter::printConstant(Constant *CPV, enum OperandContext Context) {
  
    case Type::PointerTyID:
      if (isa<ConstantPointerNull>(CPV)) {
@@ -111,7 +148,7 @@ index f0056bc..a5058b9 100644
        break;
      } else if (GlobalValue *GV = dyn_cast<GlobalValue>(CPV)) {
        writeOperand(GV);
-@@ -1613,6 +1660,7 @@ bool CWriter::printConstExprCast(ConstantExpr *CE) {
+@@ -1613,6 +1672,7 @@ bool CWriter::printConstExprCast(ConstantExpr *CE) {
    case Instruction::PtrToInt:
    case Instruction::IntToPtr:
    case Instruction::BitCast:
@@ -119,7 +156,7 @@ index f0056bc..a5058b9 100644
      Ty = CE->getType();
      NeedsExplicitCast = true;
      break;
-@@ -1750,13 +1798,30 @@ void CWriter::writeOperand(Value *Operand, enum OperandContext Context) {
+@@ -1750,13 +1810,30 @@ void CWriter::writeOperand(Value *Operand, enum OperandContext Context) {
    bool isAddressImplicit = InnerType.has_value();
    // Global variables are referenced as their addresses by llvm
    if (isAddressImplicit) {
@@ -154,7 +191,15 @@ index f0056bc..a5058b9 100644
    }
  
    writeOperandInternal(Operand, Context);
-@@ -2070,6 +2135,60 @@ static void defineForceInline(raw_ostream &Out) {
+@@ -1835,6 +1912,7 @@ void CWriter::opcodeNeedsCast(
+   case Instruction::Mul:
+     // We need to cast integer arithmetic so that it is always performed
+     // as unsigned, to avoid undefined behavior on overflow.
++  case Instruction::Shl:
+   case Instruction::LShr:
+   case Instruction::UDiv:
+   case Instruction::URem: // Cast to unsigned first
+@@ -2070,6 +2148,60 @@ static void defineForceInline(raw_ostream &Out) {
    Out << "#endif\n\n";
  }
  
@@ -215,7 +260,7 @@ index f0056bc..a5058b9 100644
  static void defineNanInf(raw_ostream &Out) {
    // Define NaN and Inf as GCC builtins if using GCC
    // From the GCC documentation:
-@@ -2342,6 +2461,10 @@ void CWriter::generateCompilerSpecificCode(raw_ostream &Out,
+@@ -2342,6 +2474,10 @@ void CWriter::generateCompilerSpecificCode(raw_ostream &Out,
      defineNoReturn(Out);
    if (headerIncForceInline())
      defineForceInline(Out);
@@ -226,7 +271,7 @@ index f0056bc..a5058b9 100644
    if (headerIncExternalWeak())
      defineExternalWeak(Out);
    if (headerIncAttributeWeak())
-@@ -2383,6 +2506,8 @@ bool CWriter::doInitialization(Module &M) {
+@@ -2383,6 +2519,8 @@ bool CWriter::doInitialization(Module &M) {
    return false;
  }
  
@@ -235,7 +280,7 @@ index f0056bc..a5058b9 100644
  bool CWriter::doFinalization(Module &M) {
    // Output all code to the file
    std::string methods = Out.str();
-@@ -2459,8 +2584,12 @@ void CWriter::generateHeader(Module &M) {
+@@ -2459,8 +2597,12 @@ void CWriter::generateHeader(Module &M) {
    OutHeaders << "#include <stdint.h>\n"; // Sized integer support
    if (headerIncMath())
      OutHeaders << "#include <math.h>\n";
@@ -248,7 +293,16 @@ index f0056bc..a5058b9 100644
    OutHeaders << "\n";
  
    Out << "\n\n/* Global Declarations */\n";
-@@ -2622,6 +2751,7 @@ void CWriter::generateHeader(Module &M) {
+@@ -2586,6 +2728,8 @@ void CWriter::generateHeader(Module &M) {
+       case Intrinsic::sshl_sat:
+       case Intrinsic::ushl_sat:
+       case Intrinsic::bswap:
++      case Intrinsic::fshl:
++      case Intrinsic::fshr:
+       case Intrinsic::ceil:
+       case Intrinsic::ctlz:
+       case Intrinsic::ctpop:
+@@ -2622,6 +2766,7 @@ void CWriter::generateHeader(Module &M) {
            I->getName() == "rint" || I->getName() == "rintf" ||
            I->getName() == "floor" || I->getName() == "floorf" ||
            I->getName() == "ceil" || I->getName() == "ceilf")) ||
@@ -256,7 +310,202 @@ index f0056bc..a5058b9 100644
          I->getName() == "alloca" || I->getName() == "_alloca" ||
          I->getName() == "_chkstk" || I->getName() == "__chkstk" ||
          I->getName() == "___chkstk_ms")
-@@ -4861,6 +4991,74 @@ void CWriter::printIntrinsicDefinition(Function &F, raw_ostream &Out) {
+@@ -3711,7 +3856,7 @@ bool CWriter::canDeclareLocalLate(Instruction &I) {
+ 
+ void CWriter::printFunction(Function &F) {
+   /// isStructReturn - Should this function actually return a struct by-value?
+-  bool isStructReturn = F.hasStructRetAttr();
++  bool isStructReturn = F.hasStructRetAttr() && !preserveSTCStructReturn(TheModule);
+ 
+   cwriter_assert(!F.isDeclaration());
+   if (F.hasDLLImportStorageClass())
+@@ -3917,7 +4062,8 @@ void CWriter::visitReturnInst(ReturnInst &I) {
+   CurInstr = &I;
+ 
+   // If this is a struct return function, return the temporary struct.
+-  bool isStructReturn = I.getParent()->getParent()->hasStructRetAttr();
++  bool isStructReturn = I.getParent()->getParent()->hasStructRetAttr() &&
++                        !preserveSTCStructReturn(TheModule);
+ 
+   if (isStructReturn) {
+     Out << "  return StructReturn;\n";
+@@ -4137,6 +4283,116 @@ void CWriter::visitUnaryOperator(UnaryOperator &I) {
+   }
+ }
+ 
++static bool isUndefFreeScalarGraph(const Value *Root) {
++  SmallPtrSet<const Value *, 32> Seen;
++  SmallVector<const Value *, 32> Work{Root};
++  while (!Work.empty()) {
++    const Value *V = Work.pop_back_val();
++    if (!Seen.insert(V).second)
++      continue;
++    if (!V->getType()->isIntegerTy() && !V->getType()->isFloatingPointTy())
++      return false;
++    if (isGuaranteedNotToBeUndef(V))
++      continue;
++    const auto *I = dyn_cast<Instruction>(V);
++    // These scalar operations may produce poison, but cannot introduce undef
++    // bits from undef-free operands. FPToSI/UI are deliberately included:
++    // their out-of-range result is poison, not undef. Poison safety is proved
++    // separately at Root; this walk alone never licenses removing a freeze.
++    if (!I || !(isa<PHINode>(I) || isa<BinaryOperator>(I) || isa<CastInst>(I) ||
++                isa<CmpInst>(I) || isa<SelectInst>(I) ||
++                I->getOpcode() == Instruction::FNeg))
++      return false;
++    for (const Value *Operand : I->operands())
++      Work.push_back(Operand);
++  }
++  return true;
++}
++
++static bool hasProvenScalarNoWrap(const Instruction *I) {
++  const auto *BO = dyn_cast<BinaryOperator>(I);
++  if (!BO || !BO->getType()->isIntegerTy() ||
++      (BO->getOpcode() != Instruction::Add &&
++       BO->getOpcode() != Instruction::Mul))
++    return false;
++  // A narrow induction PHI widened with zext has a useful upper bound even
++  // when ValueTracking cannot prove that the entire cyclic graph is defined.
++  // Prove flags from those bounds; never erase potentially overflowing flags.
++  KnownBits L = computeKnownBits(BO->getOperand(0), I->getDataLayout());
++  KnownBits R = computeKnownBits(BO->getOperand(1), I->getDataLayout());
++  APInt MaxL = L.getMaxValue(), MaxR = R.getMaxValue();
++  bool Overflow;
++  APInt Max = BO->getOpcode() == Instruction::Add ?
++      MaxL.uadd_ov(MaxR, Overflow) : MaxL.umul_ov(MaxR, Overflow);
++  if (Overflow)
++    return false;
++  if (BO->hasNoSignedWrap()) {
++    APInt SignedMax = APInt::getSignedMaxValue(Max.getBitWidth());
++    if (MaxL.ugt(SignedMax) || MaxR.ugt(SignedMax) || Max.ugt(SignedMax))
++      return false;
++  }
++  return true;
++}
++
++static bool isDefinedScalarGraph(const FreezeInst &Freeze) {
++  // A later comparison/branch on the *unfrozen* loop value can make poison
++  // immediately undefined even across intervening stores. LLVM's analysis
++  // also checks that execution cannot exit implicitly before that use. Undef
++  // does not propagate like poison, so it needs its own independent proof.
++  if (const auto *I = dyn_cast<Instruction>(Freeze.getOperand(0)))
++    if (programUndefinedIfPoison(I) && isUndefFreeScalarGraph(I))
++      return true;
++
++  // Extend ValueTracking's bounded recursion to loop-carried scalar PHIs.
++  // Every leaf must be defined and every operation must preserve definedness,
++  // including its nuw/nsw/exact flags. The PHI SCC is then safe by induction.
++  SmallPtrSet<const Value *, 32> Seen;
++  SmallPtrSet<const Value *, 8> RequiredDefined;
++  SmallPtrSet<const Value *, 8> RequiredNonPoison;
++  // An immediately following division requires a defined divisor, even if
++  // ValueTracking cannot see through the loop's PHI and range-select flags.
++  // Stop before calls/side effects: later execution must be unavoidable.
++  for (auto It = Freeze.getIterator(); It != Freeze.getParent()->end(); ++It) {
++    if (isa<CallBase>(*It) || It->mayHaveSideEffects())
++      break;
++    SmallVector<const Value *, 4> Operands;
++    getGuaranteedWellDefinedOps(&*It, Operands);
++    RequiredDefined.insert(Operands.begin(), Operands.end());
++    Operands.clear();
++    getGuaranteedNonPoisonOps(&*It, Operands);
++    RequiredNonPoison.insert(Operands.begin(), Operands.end());
++  }
++  SmallVector<const Value *, 32> Work{Freeze.getOperand(0)};
++  while (!Work.empty()) {
++    const Value *V = Work.pop_back_val();
++    if (!Seen.insert(V).second)
++      continue;
++    if (!V->getType()->isIntegerTy() && !V->getType()->isFloatingPointTy())
++      return false;
++    if (RequiredDefined.contains(V) || isGuaranteedNotToBeUndefOrPoison(V))
++      continue;
++    const auto *Inst = dyn_cast<Instruction>(V);
++    if (!Inst || !(isa<PHINode>(Inst) || isa<BinaryOperator>(Inst) ||
++                   isa<CastInst>(Inst) || isa<CmpInst>(Inst) ||
++                   isa<SelectInst>(Inst)))
++      return false;
++    if (canCreateUndefOrPoison(cast<Operator>(Inst),
++                             !RequiredNonPoison.contains(V)) &&
++        !hasProvenScalarNoWrap(Inst))
++      return false;
++    for (const Value *Operand : Inst->operands())
++      Work.push_back(Operand);
++  }
++  return true;
++}
++
++void CWriter::visitFreezeInst(FreezeInst &I) {
++  CurInstr = &I;
++  if (!isDefinedScalarGraph(I))
++    errorWithMessage("freeze operand is not proven defined");
++  writeOperand(I.getOperand(0));
++}
++
+ void CWriter::visitBinaryOperator(BinaryOperator &I) {
+   using namespace PatternMatch;
+ 
+@@ -4561,6 +4817,10 @@ void CWriter::printIntrinsicDefinition(FunctionType *funT, unsigned Opcode,
+     case Intrinsic::cttz:
+     case Intrinsic::powi:
+       break;
++    case Intrinsic::abs:
++      cwriter_assert(i == 0 ? elemT == funT->getParamType(i)
++                           : funT->getParamType(i)->isIntegerTy(1));
++      break;
+     }
+     printTypeName(Out, funT->getParamType(i), isSigned);
+     Out << " " << (char)('a' + i);
+@@ -4586,7 +4846,9 @@ void CWriter::printIntrinsicDefinition(FunctionType *funT, unsigned Opcode,
+     }
+   } else if (elemIntT) {
+     // handle integer ops
+-    cwriter_assert(isSupportedIntegerSize(*elemIntT) &&
++    cwriter_assert((isSupportedIntegerSize(*elemIntT) ||
++                    ((Opcode == Intrinsic::fshl || Opcode == Intrinsic::fshr) &&
++                     elemIntT->getBitWidth() == 24)) &&
+                    "CBackend does not support arbitrary size integers.");
+     switch (Opcode) {
+     default:
+@@ -4722,6 +4984,21 @@ void CWriter::printIntrinsicDefinition(FunctionType *funT, unsigned Opcode,
+       Out << " : r;\n";
+       break;
+ 
++    case Intrinsic::fshl:
++    case Intrinsic::fshr: {
++      unsigned Bits = elemIntT->getBitWidth();
++      if (Bits > 64 || numParams != 3 || retT != elemT)
++        errorWithMessage("unsupported scalar funnel shift width/signature");
++      // LLVM reduces the shift modulo the element width. Handle zero
++      // separately so C never shifts by the full width (undefined behavior).
++      Out << "  c = c % " << Bits << ";\n";
++      if (Opcode == Intrinsic::fshl)
++        Out << "  r = c == 0 ? a : ((a << c) | (b >> (" << Bits << " - c)));\n";
++      else
++        Out << "  r = c == 0 ? b : ((a << (" << Bits << " - c)) | (b >> c));\n";
++      break;
++    }
++
+     case Intrinsic::bswap:
+       cwriter_assert(retT == elemT);
+       cwriter_assert(!isa<VectorType>(retT));
+@@ -4784,7 +5061,13 @@ void CWriter::printIntrinsicDefinition(FunctionType *funT, unsigned Opcode,
+       Out << "  r = a < b ? a : b;\n";
+       break;
+     case Intrinsic::abs:
+-      Out << "  r = a < 0 ? -a : a;\n";
++      if (elemIntT->getBitWidth() > 64 || numParams != 2 || retT != elemT)
++        errorWithMessage("unsupported scalar abs width/signature");
++      // a is the unsigned bit representation. Testing a < 0 is always false;
++      // signed negation would also overflow for INT_MIN when poison=false.
++      Out << "  (void)b;\n";
++      Out << "  r = (a >> " << elemIntT->getBitWidth() - 1
++          << ") ? (0u - a) : a;\n";
+       break;
+     case Intrinsic::is_constant:
+       Out << "  r = 0 /* llvm.is.constant */;\n";
+@@ -4861,6 +5144,74 @@ void CWriter::printIntrinsicDefinition(Function &F, raw_ostream &Out) {
    printIntrinsicDefinition(funT, Opcode, OpName, Out);
  }
  
@@ -331,7 +580,16 @@ index f0056bc..a5058b9 100644
  bool CWriter::lowerIntrinsics(Function &F) {
    bool LoweredAny = false;
  
-@@ -4910,6 +5108,7 @@ bool CWriter::lowerIntrinsics(Function &F) {
+@@ -4896,6 +5247,8 @@ bool CWriter::lowerIntrinsics(Function &F) {
+           case Intrinsic::ushl_sat:
+           case Intrinsic::sshl_sat:
+           case Intrinsic::bswap:
++          case Intrinsic::fshl:
++          case Intrinsic::fshr:
+           case Intrinsic::ceil:
+           case Intrinsic::ctlz:
+           case Intrinsic::ctpop:
+@@ -4910,6 +5263,7 @@ bool CWriter::lowerIntrinsics(Function &F) {
            case Intrinsic::sqrt:
            case Intrinsic::trunc:
            case Intrinsic::trap:
@@ -339,7 +597,7 @@ index f0056bc..a5058b9 100644
            case Intrinsic::stackprotector:
            case Intrinsic::dbg_value:
            case Intrinsic::dbg_declare:
-@@ -4923,6 +5122,15 @@ bool CWriter::lowerIntrinsics(Function &F) {
+@@ -4923,6 +5277,15 @@ bool CWriter::lowerIntrinsics(Function &F) {
              // We directly implement these intrinsics
              break;
  
@@ -355,7 +613,44 @@ index f0056bc..a5058b9 100644
            default:
              // All other intrinsic calls we must lower.
              LoweredAny = true;
-@@ -5007,8 +5215,13 @@ void CWriter::visitCallInst(CallInst &I) {
+@@ -4930,6 +5293,7 @@ bool CWriter::lowerIntrinsics(Function &F) {
+             Instruction *Before = (CI == &BB.front())
+                                       ? nullptr
+                                       : &*std::prev(BasicBlock::iterator(CI));
++            Instruction *After = CI->getNextNode();
+ 
+             IL->LowerIntrinsicCall(CI);
+             if (Before) { // Move iterator to instruction after call
+@@ -4942,10 +5306,15 @@ bool CWriter::lowerIntrinsics(Function &F) {
+             // If the intrinsic got lowered to another call, and that call has
+             // a definition, then we need to make sure its prototype is emitted
+             // before any calls to it.
+-            if (CallInst *Call = dyn_cast<CallInst>(I))
+-              if (Function *NewF = Call->getCalledFunction())
+-                if (!NewF->isDeclaration())
+-                  prototypesToGen.push_back(NewF);
++            // An erased assume/lifetime/invariant marker inserts no call.
++            // Do not mistake the following pre-existing constructor call for
++            // a new helper: its normal prototype already has correct linkage.
++            for (auto NewI = I; NewI != BB.end() && &*NewI != After; ++NewI)
++              if (CallInst *Call = dyn_cast<CallInst>(&*NewI))
++                if (Function *NewF = Call->getCalledFunction())
++                  if (!NewF->isDeclaration() &&
++                      !llvm::is_contained(prototypesToGen, NewF))
++                    prototypesToGen.push_back(NewF);
+ 
+             break;
+           }
+@@ -4975,7 +5344,7 @@ void CWriter::visitCallInst(CallInst &I) {
+   // If this is a call to a struct-return function, assign to the first
+   // parameter instead of passing it to the call.
+   const AttributeList &PAL = I.getAttributes();
+-  bool isStructRet = I.hasStructRetAttr();
++  bool isStructRet = I.hasStructRetAttr() && !preserveSTCStructReturn(TheModule);
+   if (isStructRet) {
+     writeOperandDeref(I.getArgOperand(0));
+     Out << " = ";
+@@ -5007,8 +5376,13 @@ void CWriter::visitCallInst(CallInst &I) {
        }
  
    if (NeedsCast) {
@@ -371,7 +666,7 @@ index f0056bc..a5058b9 100644
      writeOperand(Callee, ContextCasted);
      Out << ')';
    } else {
-@@ -5057,11 +5270,26 @@ void CWriter::visitCallInst(CallInst &I) {
+@@ -5057,11 +5431,26 @@ void CWriter::visitCallInst(CallInst &I) {
            /*isSigned=*/PAL.hasAttributeAtIndex(ArgNo + 1, Attribute::SExt));
        Out << ')';
      }
@@ -398,7 +693,7 @@ index f0056bc..a5058b9 100644
      PrintedArg = true;
    }
    Out << ')';
-@@ -5210,6 +5438,52 @@ bool CWriter::visitBuiltinCall(CallInst &I, Intrinsic::ID ID) {
+@@ -5210,6 +5599,52 @@ bool CWriter::visitBuiltinCall(CallInst &I, Intrinsic::ID ID) {
      headerUseTrap();
      Out << "__builtin_trap()";
      return true;
@@ -451,8 +746,36 @@ index f0056bc..a5058b9 100644
  
    // these use the normal function call emission
    case Intrinsic::sadd_with_overflow:
+@@ -5238,6 +5673,8 @@ bool CWriter::visitBuiltinCall(CallInst &I, Intrinsic::ID ID) {
+   case Intrinsic::umul_with_overflow:
+   case Intrinsic::smul_with_overflow:
+   case Intrinsic::bswap:
++  case Intrinsic::fshl:
++  case Intrinsic::fshr:
+   case Intrinsic::ctlz:
+   case Intrinsic::ctpop:
+   case Intrinsic::cttz:
+@@ -5844,7 +6281,6 @@ void CWriter::visitExtractValueInst(ExtractValueInst &EVI) {
+ }
+ 
+ [[noreturn]] void CWriter::errorWithMessage(const char *message) {
+-#ifndef NDEBUG
+   errs() << message;
+   errs() << " in: ";
+   if (CurInstr != nullptr) {
+@@ -5854,9 +6290,7 @@ void CWriter::visitExtractValueInst(ExtractValueInst &EVI) {
+     errs() << "<unknown instruction>";
+   }
+   errs() << "\n";
+-#endif
+-
+-  llvm_unreachable(message);
++  report_fatal_error(message, false);
+ }
+ 
+ } // namespace llvm_cbe
 diff --git a/lib/Target/CBackend/CBackend.h b/lib/Target/CBackend/CBackend.h
-index 2468501..3585560 100644
+index 2468501..cededa3 100644
 --- a/lib/Target/CBackend/CBackend.h
 +++ b/lib/Target/CBackend/CBackend.h
 @@ -100,6 +100,7 @@ class CWriter : public FunctionPass, public InstVisitor<CWriter> {
@@ -489,7 +812,11 @@ index 2468501..3585560 100644
    USED_HEADERS_FLAG(Trap)
    USED_HEADERS_FLAG(ConstructorsDestructors)
  
-@@ -310,6 +316,7 @@ private:
+@@ -307,9 +313,11 @@ private:
+ 
+   void visitCastInst(CastInst &I);
+   void visitSelectInst(SelectInst &I);
++  void visitFreezeInst(FreezeInst &I);
    void visitCallInst(CallInst &I);
    void visitInlineAsm(CallInst &I);
    bool visitBuiltinCall(CallInst &I, Intrinsic::ID ID);

@@ -27,6 +27,7 @@
 -------------------------------------------------------------------------*/
 
 #include <stdint.h>
+#include <limits.h>
 #include <stdbool.h>
 
 #include <sdcc-lib.h>
@@ -39,14 +40,15 @@ _divslonglong (long long numerator, long long denominator) __SDCC_NONBANKED
   bool denominatorneg = (denominator < 0);
   long long d;
 
-  if (numeratorneg)
+  /* LLONG_MIN already has the desired unsigned magnitude bit pattern.
+     Guard it explicitly to avoid signed overflow without extra 64-bit RAM. */
+  if (numeratorneg && numerator != LLONG_MIN)
     numerator = -numerator;
-  if (denominatorneg)
+  if (denominatorneg && denominator != LLONG_MIN)
     denominator = -denominator;
 
   d = (unsigned long long)numerator / (unsigned long long)denominator;
 
-  return ((numeratorneg ^ denominatorneg) ? -d : d);
+  return (((numeratorneg ^ denominatorneg) && d != LLONG_MIN) ? -d : d);
 }
 #endif
-

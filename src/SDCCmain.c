@@ -2565,25 +2565,40 @@ preProcess (char **envp)
       if (options.dependencyFileOpt)
         {
           struct dbuf_s dbuf;
+          struct dbuf_s filename;
+          char *escaped;
 
           dbuf_init (&dbuf, PATH_MAX);
+          dbuf_init (&filename, PATH_MAX);
           if (options.dependencyFileOpt == SYSTEM_DEPENDENCY_FILE_OPT)
             dbuf_append_str (&dbuf, "-MD ");
           else
             dbuf_append_str (&dbuf, "-MMD ");
           dbuf_append_str (&dbuf, "-MF ");
           if (fullDstFileName)
-            dbuf_splitFile (fullDstFileName, &dbuf, NULL);
+            dbuf_splitFile (fullDstFileName, &filename, NULL);
           else
-            dbuf_append_str (&dbuf, dstFileName);
-          dbuf_append_str (&dbuf, ".d");
+            dbuf_append_str (&filename, dstFileName);
+          dbuf_append_str (&filename, ".d");
+          /* These filenames become arguments to a host shell. Keep paths
+             containing spaces (or shell metacharacters) in one argument. */
+          escaped = shell_escape (dbuf_c_str (&filename));
+          dbuf_append_str (&dbuf, escaped);
+          Safe_free (escaped);
           addSet (&preArgvSet, dbuf_detach_c_str (&dbuf));
 
           dbuf_init (&dbuf, PATH_MAX);
+          dbuf_set_length (&filename, 0);
           if (fullDstFileName)
-            dbuf_printf (&dbuf, "-MT %s", fullDstFileName);
+            dbuf_append_str (&filename, fullDstFileName);
           else
-            dbuf_printf (&dbuf, "-MT %s%s", dstFileName, port->linker.rel_ext);
+            dbuf_printf (&filename, "%s%s", dstFileName, port->linker.rel_ext);
+          escaped = shell_escape (dbuf_c_str (&filename));
+          /* -MQ also quotes Make syntax in the emitted target, allowing
+             Arduino's dependency parser to identify the actual object. */
+          dbuf_printf (&dbuf, "-MQ %s", escaped);
+          Safe_free (escaped);
+          dbuf_destroy (&filename);
           addSet (&preArgvSet, dbuf_detach_c_str (&dbuf));
         }
 

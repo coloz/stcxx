@@ -202,9 +202,10 @@ not_negative:
 
 int _modsint (int a, int b) __SDCC_NONBANKED
 {
-  register int r;
+  register unsigned int r;
 
-  r = (unsigned)(a < 0 ? -a : a) % (unsigned)(b < 0 ? -b : b);
+  r = (a < 0 ? 0u - (unsigned int)a : (unsigned int)a) %
+      (b < 0 ? 0u - (unsigned int)b : (unsigned int)b);
 
   if (a < 0)
     return -r;

@@ -40,7 +40,9 @@ ALLOWED_OPCODES = {
     "insertvalue", "alloca", "load", "store", "getelementptr", "trunc",
     "zext", "sext", "fptrunc", "fpext", "fptoui", "fptosi", "uitofp",
     "sitofp", "ptrtoint", "inttoptr", "bitcast", "addrspacecast", "icmp",
-    "fcmp", "phi", "select", "call",
+    # The pinned CBE only lowers scalar freeze after proving its operand is
+    # defined (including loop-carried PHIs); unknown/poison shapes fail there.
+    "fcmp", "phi", "select", "freeze", "call",
 }
 
 ALLOWED_INTRINSIC_PREFIXES = (
@@ -58,11 +60,21 @@ ALLOWED_INTRINSIC_PREFIXES = (
 # intrinsics still fail closed.
 ALLOWED_INTRINSIC_NAMES = {
     "llvm.experimental.noalias.scope.decl",
+    # The pinned CBE removes assume after LLVM has consumed its information.
+    # collect_intrinsics separately verifies the scalar, bundle-free form.
+    "llvm.assume",
+    "llvm.invariant.start.p0",
     # LLVM 20 lowers the C/C++ isinf()/isnan() builtins retained by Arduino
     # Print::printFloat() to these exact scalar forms.  The pinned LLVM-CBE
     # implements both types and rejects malformed operands or other widths.
     "llvm.is.fpclass.f32",
     "llvm.is.fpclass.f64",
+    "llvm.fabs.f32",
+    *{f"llvm.{operation}.i{bits}" for operation in ("smin", "smax", "umin", "umax")
+      for bits in (8, 16, 32, 64)},
+    *{f"llvm.{operation}.i{bits}" for operation in ("fshl", "fshr")
+      for bits in (8, 16, 24, 32, 64)},
+    *{f"llvm.abs.i{bits}" for bits in (8, 16, 32, 64)},
 }
 
 FORBIDDEN_IR_PATTERNS = {
@@ -73,7 +85,9 @@ FORBIDDEN_IR_PATTERNS = {
     ),
     "thread_local": re.compile(r"\bthread_local\b"),
     "comdat": re.compile(r"\bcomdat\b"),
-    "alias_or_ifunc": re.compile(r"\b(?:alias|ifunc)\b"),
+    # A global alias/ifunc definition has a keyword after its '='. Metadata
+    # attachments such as !alias.scope are not symbol aliases.
+    "alias_or_ifunc": re.compile(r"^\s*@[^\n=]+=[^\n]*\b(?:alias|ifunc)\s+", re.M),
     "inline_assembly": re.compile(r"\b(?:call|invoke)\s+[^\n]*\basm\b"),
     "scalable_vector": re.compile(r"<\s*vscale\s+x\s+"),
     "fixed_vector": re.compile(r"<\s*[1-9][0-9]*\s+x\s+[^{}>]+>"),
@@ -102,6 +116,539 @@ def require(condition: bool, message: str) -> None:
         raise AuditError(message)
 
 
+_C_OPAQUE = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', re.DOTALL)
+_LLVM_OPAQUE = re.compile(r'[@%]"(?:\\.|[^"\\])*"|"(?:\\.|[^"\\])*"|;[^\n]*')
+
+
+def _blank_token(match: re.Match[str]) -> str:
+    return ''.join('\n' if char == '\n' else ' ' for char in match.group(0))
+
+
+def mask_c_data(payload: str) -> str:
+    """Keep code offsets/newlines while making comments and literals opaque."""
+    return _C_OPAQUE.sub(_blank_token, payload)
+
+
+def mask_llvm_data(ir: str) -> str:
+    """Mask LLVM literal data/comments, retaining quoted @/% identifiers."""
+    return _LLVM_OPAQUE.sub(
+        lambda m: m.group(0) if m.group(0).startswith(('@', '%')) else _blank_token(m), ir
+    )
+
+
+def audit_native_aggregate_abi(ir: str, native_roots=()) -> dict[str, object]:
+    """Reject incompatible aggregate signatures at direct native C boundaries.
+
+    SDCC's native struct return pushes a hidden stack argument and disables
+    argument registers. CBE's explicit LLVM sret parameter uses the normal
+    pointer ABI instead. Internal C++ calls share the latter convention.
+    Aggregate callbacks must have proven internal provenance; opaque native
+    boundaries use scalar callbacks or explicit pointer/result parameters.
+    """
+    source = mask_llvm_data(ir)
+    identifier = r'"(?:[^"\\]|\\[0-9A-Fa-f]{2})*"|[-A-Za-z$._0-9]+'
+    quoted = r'"(?:[^"\\]|\\[0-9A-Fa-f]{2})*"'
+    header = re.compile(r'^\s*(define|declare)\s+((?:' + quoted + r'|[^@"])*?)@(' + identifier + r')\s*\(', re.M)
+    roots = set(native_roots)
+    checked = []
+    rejected = []
+    for match in header.finditer(source):
+        raw_name = match[3]
+        name = (re.sub(r'\\([0-9A-Fa-f]{2})', lambda m: chr(int(m[1], 16)), raw_name[1:-1])
+                if raw_name.startswith('"') else raw_name)
+        if name.startswith('llvm.') or (match[1] == 'define' and name not in roots):
+            continue
+        # The input is verified LLVM IR. Still parse balanced attribute/type
+        # parentheses so multiline declarations and quoted names cannot hide
+        # an sret/byval parameter from the boundary check.
+        depth = 1
+        end = None
+        for token in re.finditer(r'"(?:[^"\\]|\\.)*"|[()]', source[match.end():]):
+            if token[0] == '(':
+                depth += 1
+            elif token[0] == ')':
+                depth -= 1
+                if depth == 0:
+                    end = match.end() + token.start()
+                    break
+        require(end is not None, f'cannot parse native function signature: {name}')
+        parameters = source[match.end():end]
+        # Quoted identifiers are opaque here; their spelling is not an ABI
+        # attribute. Preserve the leading % so named aggregate types remain.
+        signature = re.sub(r'"(?:[^"\\]|\\.)*"', '""', parameters)
+        result = re.sub(r'"(?:[^"\\]|\\.)*"', '""', match[2])
+        reasons = sorted(set(re.findall(r'\b(sret|byval|byref|inalloca|preallocated)\s*\(', signature)))
+        if re.search(r'[%{\[<]', result):
+            reasons.append('aggregate return')
+        # Split only at the outermost comma (literal structs and arrays may
+        # themselves contain commas). Attributes with type arguments stay intact.
+        nesting = 0
+        begin = 0
+        parts = []
+        for index, character in enumerate(signature + ','):
+            if character in '({[<':
+                nesting += 1
+            elif character in ')}]>':
+                nesting -= 1
+            elif character == ',' and nesting == 0:
+                parts.append(signature[begin:index].lstrip())
+                begin = index + 1
+        if any(part.startswith(('%', '{', '[', '<')) for part in parts):
+            reasons.append('aggregate argument')
+        if reasons:
+            rejected.append(f'{name} ({", ".join(reasons)})')
+        checked.append(name)
+    require(not rejected, 'unsupported native C aggregate ABI: ' + '; '.join(rejected)
+            + '; use an explicit pointer/result parameter at the C boundary')
+    return {'policy': 'scalar-and-explicit-pointer-direct-native-boundaries',
+            'checked_symbols': sorted(set(checked)),
+            'opaque_native_callbacks_qualified': False,
+            'callback_provenance': audit_native_callback_abi(ir, native_roots)}
+
+
+def audit_native_callback_abi(ir, native_roots=()):
+    """Conservatively prove that aggregate callbacks stay inside this IR module.
+
+    The verified LLVM printer supplies the syntax. This flow-insensitive graph
+    merges aliases/fields deliberately: an ambiguous aggregate callback fails,
+    rather than guessing a native signature erased by opaque pointers.
+    """
+    from collections import defaultdict, deque
+
+    source = mask_llvm_data(ir)
+    identifier = r'"(?:[^"\\]|\\[0-9A-Fa-f]{2})*"|[-A-Za-z$._0-9]+'
+    value_pattern = re.compile(r'[@%](?:' + identifier + r')')
+
+    def decoded(raw):
+        if raw.startswith('"'):
+            return re.sub(r'\\([0-9A-Fa-f]{2})', lambda m: chr(int(m[1], 16)), raw[1:-1])
+        return raw
+
+    def split(text):
+        parts, begin, depth = [], 0, 0
+        for token in re.finditer(r'"(?:[^"\\]|\\.)*"|[(){}\[\]<>,]', text + ','):
+            char = token[0]
+            if char in ('(', '{', '[', '<'):
+                depth += 1
+            elif char in (')', '}', ']', '>'):
+                depth -= 1
+            elif char == ',' and depth == 0:
+                parts.append(text[begin:token.start()].strip())
+                begin = token.end()
+        return [part for part in parts if part]
+
+    def end_arguments(text, begin):
+        depth = 1
+        for token in re.finditer(r'"(?:[^"\\]|\\.)*"|[()]', text[begin:]):
+            if token[0] == '(':
+                depth += 1
+            elif token[0] == ')':
+                depth -= 1
+                if depth == 0:
+                    return begin + token.start()
+        require(False, 'cannot parse native callback argument list')
+
+    def aggregate(result, parameters):
+        result = re.sub(r'"(?:[^"\\]|\\.)*"', '""', result)
+        parameters = re.sub(r'"(?:[^"\\]|\\.)*"', '""', parameters)
+        return bool(re.search(r'[%{\[<]', result) or
+                    re.search(r'\b(?:sret|byval|byref|inalloca|preallocated)\s*\(', parameters) or
+                    any(p.startswith(('%', '{', '[', '<')) for p in split(parameters)))
+
+    functions, bodies = {}, []
+    quoted = r'"(?:[^"\\]|\\[0-9A-Fa-f]{2})*"'
+    header = re.compile(r'^\s*(define|declare)\s+((?:' + quoted + r'|[^@"])*?)@(' + identifier + r')\s*\(', re.M)
+    for match in header.finditer(source):
+        name = decoded(match[3])
+        end = end_arguments(source, match.end())
+        parameters = source[match.end():end]
+        function = {'defined': match[1] == 'define', 'parameters': split(parameters),
+                    'aggregate': aggregate(match[2], parameters), 'locals': set(), 'body': ''}
+        if function['defined']:
+            opening = source.find('{', end)
+            require(opening >= 0, 'missing callback function body: ' + name)
+            closing = re.search(r'^\s*\}\s*$', source[opening + 1:], re.M)
+            require(closing is not None, 'cannot delimit callback function body: ' + name)
+            finish = opening + 1 + closing.end()
+            function['body'] = source[opening + 1:opening + 1 + closing.start()]
+            bodies.append((match.start(), finish))
+            for parameter in function['parameters']:
+                names = value_pattern.findall(parameter)
+                require(names and names[-1].startswith('%'), 'unnamed callback formal: ' + name)
+                function['locals'].add(decoded(names[-1][1:]))
+            for line in function['body'].splitlines():
+                definition = re.match(r'\s*(%(?:' + identifier + r'))\s*=', line)
+                if definition:
+                    function['locals'].add(decoded(definition[1][1:]))
+        functions[name] = function
+
+    unsafe = {name for name, f in functions.items() if f['aggregate'] and not name.startswith('llvm.')}
+    # A native factory may supply an aggregate callback even when there are
+    # no aggregate function definitions in the C++ module.
+    edges, origins = defaultdict(set), defaultdict(set)
+    queue = deque()
+    unknown = '<native-or-unresolved>'
+    exposed, writes, calls = set(), set(), []
+    roots = set(native_roots)
+
+    def node(scope, token):
+        kind, name = token[0], decoded(token[1:])
+        if kind == '@':
+            return ('', name)
+        if name in functions[scope]['locals']:
+            return (scope, name)
+        return None  # named LLVM type or block label, not an SSA value
+
+    def refs(scope, text):
+        return {n for token in value_pattern.findall(text) if (n := node(scope, token)) is not None}
+
+    def seed(n, values):
+        new = set(values) - origins[n]
+        if new:
+            origins[n].update(new)
+            queue.append(n)
+            return True
+        return False
+
+    def edge(a, b):
+        if b in edges[a]:
+            return False
+        edges[a].add(b)
+        seed(b, origins[a])
+        return True
+
+    def connect(left, right, alias=False):
+        changed = False
+        for a in left:
+            for b in right:
+                changed |= edge(a, b)
+                if alias:
+                    changed |= edge(b, a)
+        return changed
+
+    def propagate():
+        while queue:
+            current = queue.popleft()
+            for destination in edges[current]:
+                seed(destination, origins[current])
+
+    for name, function in functions.items():
+        seed(('', name), [name])
+        if function['defined'] and name in roots:
+            for parameter in function['parameters']:
+                for n in refs(name, parameter):
+                    seed(n, [unknown])
+            exposed.add(((name, None), 'native root return ' + name))
+
+    # Globals, including initializer tables, are memory nodes. Internal
+    # storage can hold callbacks; externally visible storage can escape to C.
+    globals_source = source
+    for begin, end in reversed(bodies):
+        globals_source = globals_source[:begin] + '\n' * source[begin:end].count('\n') + globals_source[end:]
+    global_pattern = re.compile(r'^\s*@(' + identifier + r')\s*=(.*?)'
+        r'(?=^\s*(?:[@%!]|define\b|declare\b|target\b|source_filename\b|attributes\b)|\Z)', re.M | re.S)
+    for match in global_pattern.finditer(globals_source):
+        name, initializer = decoded(match[1]), match[2]
+        destination = ('', name)
+        for token in value_pattern.findall(initializer):
+            if token.startswith('@'):
+                connect({('', decoded(token[1:]))}, {destination}, alias=True)
+        if not re.search(r'\b(?:internal|private)\b', initializer):
+            seed(destination, [unknown])
+            exposed.add((destination, 'externally visible global ' + name))
+
+    for name, function in functions.items():
+        if not function['defined']:
+            continue
+        for index, raw_line in enumerate(function['body'].splitlines()):
+            line = raw_line.strip()
+            if not line:
+                continue
+            definition = re.match(r'(%(?:' + identifier + r'))\s*=\s*(.*)', line)
+            destination = {node(name, definition[1])} if definition else set()
+            instruction = definition[2] if definition else line
+            location = name + ':' + str(index + 1)
+            call = re.search(r'\bcall\s+', instruction)
+            if call:
+                callee = re.search(r'([@%](?:' + identifier + r'))\s*\(', instruction[call.end():])
+                require(callee is not None, 'unproven native callback call syntax: ' + location)
+                start = call.end() + callee.end()
+                end = end_arguments(instruction, start)
+                prefix = instruction[call.end():call.end() + callee.start()]
+                parameters = instruction[start:end]
+                args = [refs(name, p) for p in split(parameters)]
+                calls.append({'callee': node(name, callee[1]), 'args': args, 'result': destination,
+                              'location': location, 'aggregate': aggregate(prefix, parameters),
+                              'indirect': callee[1].startswith('%')})
+            elif instruction.startswith('store '):
+                operands = split(instruction[6:])
+                require(len(operands) >= 2, 'unproven callback store: ' + location)
+                target = refs(name, operands[1])
+                connect(refs(name, operands[0]), target, alias=True)
+                writes.update((n, location) for n in target)
+            elif instruction.startswith('load '):
+                operands = split(instruction[5:])
+                require(len(operands) >= 2, 'unproven callback load: ' + location)
+                connect(refs(name, operands[1]), destination, alias=True)
+            elif instruction.startswith('ret '):
+                connect(refs(name, instruction[4:]), {(name, None)}, alias=True)
+            elif instruction.startswith('select '):
+                operands = split(instruction[7:])
+                require(len(operands) == 3, 'unproven callback select: ' + location)
+                connect(refs(name, operands[1] + ', ' + operands[2]), destination, alias=True)
+            elif instruction.startswith('getelementptr inbounds '):
+                operands = split(instruction[len('getelementptr inbounds '):])
+                require(len(operands) >= 2, 'unproven callback address: ' + location)
+                # An inbounds GEP stays in its base object. Its integer index
+                # selects a field/element; it does not supply a pointer origin.
+                connect(refs(name, operands[1]), destination, alias=True)
+            elif not instruction.startswith(('alloca ', 'icmp ', 'fcmp ')):
+                # Copies, phi/select, aggregate operations and pointer/integer
+                # conversions retain provenance. Alias both ways for stores
+                # through derived addresses; merging fields is conservative.
+                connect(refs(name, instruction), destination, alias=True)
+
+    if not unsafe and not any(call['aggregate'] for call in calls):
+        return {'policy': 'aggregate-callbacks-confined-to-verified-module',
+                'aggregate_functions': [], 'indirect_aggregate_calls': [], 'analysis': 'not-required'}
+
+    def native_call(call):
+        changed = False
+        for n in call['result']:
+            changed |= seed(n, [unknown])
+        for argument in call['args']:
+            for n in argument:
+                exposure = (n, 'native call ' + call['location'])
+                if exposure not in exposed:
+                    exposed.add(exposure)
+                    changed = True
+                # Opaque native code can replace pointers in accessible data.
+                # A known function address itself is immutable code storage.
+                if not origins[n] or unknown in origins[n] or not origins[n] <= functions.keys():
+                    changed |= seed(n, [unknown])
+        return changed
+
+    unresolved_enabled = False
+    while True:
+        propagate()
+        changed = False
+        for call in calls:
+            targets = origins[call['callee']]
+            for target in sorted(targets - {unknown}):
+                function = functions.get(target)
+                if target.startswith(('llvm.memcpy.', 'llvm.memmove.')):
+                    require(len(call['args']) >= 2, 'invalid memory intrinsic')
+                    changed |= connect(call['args'][1], call['args'][0], alias=True)
+                    writes.update((n, call['location']) for n in call['args'][0])
+                elif target.startswith('llvm.'):
+                    for n in call['result']:
+                        changed |= seed(n, [unknown])
+                elif function and function['defined'] and len(function['parameters']) == len(call['args']):
+                    for argument, formal in zip(call['args'], function['parameters']):
+                        changed |= connect(argument, refs(target, formal), alias=True)
+                    changed |= connect({(target, None)}, call['result'], alias=True)
+                else:
+                    changed |= native_call(call)
+            if unknown in targets or (unresolved_enabled and not targets):
+                changed |= native_call(call)
+        # A scalar callback escaping to native code is another entry point:
+        # C may supply its pointer parameters and observe its return value.
+        # Include these transitive entries in the fixed point, even if all
+        # currently visible IR callers happen to pass an internal callback.
+        escaping = {n for n, _ in exposed}
+        escaping.update(n for n, _ in writes if unknown in origins[n])
+        for n in escaping:
+            for target in tuple(origins[n]):
+                function = functions.get(target)
+                if not function or not function['defined']:
+                    continue
+                for formal in function['parameters']:
+                    for parameter in refs(target, formal):
+                        changed |= seed(parameter, [unknown])
+                exposure = ((target, None), 'native callback return ' + target)
+                if exposure not in exposed:
+                    exposed.add(exposure)
+                    changed = True
+        if not changed and not queue:
+            if unresolved_enabled:
+                break
+            unresolved_enabled = True
+
+    rejected = set()
+    for n, location in exposed:
+        callbacks = origins[n] & unsafe
+        if callbacks:
+            rejected.add(location + ': ' + ', '.join(sorted(callbacks)))
+    for n, location in writes:
+        if unknown in origins[n] and origins[n] & unsafe:
+            rejected.add('store through native/unknown memory ' + location)
+    checked = []
+    for call in calls:
+        if call['aggregate']:
+            targets = origins[call['callee']]
+            if targets and all(target.startswith('llvm.') for target in targets):
+                continue  # Intrinsic signatures are verified by LLVM/the IR gate.
+            valid = (targets and unknown not in targets and all(
+                target in functions and functions[target]['defined'] and functions[target]['aggregate'] and
+                len(functions[target]['parameters']) == len(call['args']) for target in targets))
+            if not valid:
+                rejected.add('unproven incoming aggregate callback ' + call['location'])
+            if call['indirect']:
+                checked.append({'site': call['location'], 'targets': sorted(targets)})
+    require(not rejected, 'unsupported native C aggregate callback ABI: ' + '; '.join(sorted(rejected)) +
+            '; use scalar callbacks or explicit pointer/result parameters at native boundaries')
+    return {'policy': 'aggregate-callbacks-confined-to-verified-module',
+            'aggregate_functions': sorted(unsafe), 'indirect_aggregate_calls': checked,
+            'analysis': 'conservative-flow-insensitive-provenance', 'graph_nodes': len(origins)}
+
+
+def audit_ignored_pointer_arguments(ir: str):
+    """Audit CBE's null materialization of unused private pointer formals.
+
+    Address-taken methods/callbacks retain their ABI even after LLVM proves a
+    pointer argument unused. Accept only direct calls with matching scalar
+    signatures and NO SSA uses of each ignored formal. ABI-affecting/unknown
+    attributes and noundef on an ignored pointer remain rejected. Other
+    arguments are preserved, and original IR/CBE output are never rewritten.
+    """
+    source = mask_llvm_data(ir)
+    symbol = r'[-A-Za-z$._0-9]+'
+    safe_pointer_attrs = r'(?:(?:nocapture|nonnull|readnone) |align [1-9][0-9]* )*'
+    supported_attrs = (r'(?:(?:nocapture|nonnull|readnone|noundef|zeroext|signext|'
+                       r'noalias|readonly|writeonly) |align [1-9][0-9]* |'
+                       r'dereferenceable(?:_or_null)?\([0-9]+\) )*')
+    argument = re.compile(rf'(?P<type>ptr|i(?:1|8|16|24|32|64)) '
+                          rf'(?P<attrs>{supported_attrs})'
+                          rf'(?P<value>[%@]{symbol}|-?[0-9]+|true|false|null|poison|undef)')
+
+    def parse(text, formal=False):
+        parts = text.split(', ')
+        args = [argument.fullmatch(part) for part in parts]
+        if not all(args):
+            return None
+        if formal and any(not a['value'].startswith('%') for a in args):
+            return None
+        return args
+
+    definitions = re.finditer(
+        rf'^define (?:internal|private) [^\n@]*@({symbol})'
+        rf'\(([^\n]*)\)[^\n]*\{{\n(.*?)^\}}', source, re.M | re.S)
+    ignored = {}
+    for match in definitions:
+        args = parse(match[2], formal=True)
+        if args is None:
+            continue
+        unused = {}
+        for index, arg in enumerate(args):
+            if (arg['type'] == 'ptr' and re.fullmatch(safe_pointer_attrs, arg['attrs'])
+                    and not re.search(re.escape(arg['value']) + r'(?![-A-Za-z$._0-9])', match[3])):
+                unused[index] = arg['value']
+        if unused:
+            ignored[match[1]] = ([a['type'] for a in args], unused)
+
+    records = []
+    calls = re.compile(rf'(?P<head>\bcall [^\n@]*@(?P<callee>{symbol})\()'
+                       r'(?P<args>[^\n]*)\)')
+
+    def replace(match):
+        if match['callee'] not in ignored:
+            return match[0]
+        args = parse(match['args'])
+        types, unused = ignored[match['callee']]
+        if args is None or [a['type'] for a in args] != types:
+            return match[0]
+        unstable = [i for i, arg in enumerate(args) if arg['value'] in ('poison', 'undef')]
+        if not unstable or any(i not in unused or
+                               not re.fullmatch(safe_pointer_attrs, args[i]['attrs'])
+                               for i in unstable):
+            return match[0]
+        parts = match['args'].split(', ')
+        for index in unstable:
+            arg = args[index]
+            parts[index] = parts[index][:arg.start('value')] + 'null'
+            records.append(dict(callee=match['callee'], formal=unused[index],
+                                argument_index=index,
+                                line=source.count('\n', 0, match.start()) + 1,
+                                value=arg['value'], cbe_materialization='null-unused'))
+        return match['head'] + ', '.join(parts) + ')'
+
+    return calls.sub(replace, source), records
+
+
+def canonicalize_widened_pointer_differences(ir: str):
+    """Audit-only equivalence for zext(ptrtoint i24) pairs subtracted in i32.
+
+    LLVM can split a ptrtoint-to-i32 into a native-width conversion and zext.
+    The subtraction must stay i32. Both operands are in [0, 2**24-1], so nsw
+    is provable; nuw is not. No arithmetic or pointer representation is changed
+    in the CBE input/output. Unrecognized or escaping shapes remain rejected.
+    """
+    ssa=r'%[-A-Za-z$._0-9]+'
+    function=re.compile(r'^define[^\n]*\{\n(?P<body>.*?)^\}',re.M|re.S)
+    cast=re.compile(rf'^\s*({ssa}) = ptrtoint ptr ({ssa}) to i24\s*$',re.M)
+    extend=re.compile(rf'^\s*({ssa}) = (zext i24 ({ssa}) to i32|trunc i24 ({ssa}) to i16)\s*$',re.M)
+    subtract=re.compile(rf'^\s*({ssa}) = sub(?P<flag> nsw)? i(?P<bits>32|16) ({ssa}), ({ssa})\s*$',re.M)
+    records=[]
+    def rewrite(match):
+        body=match['body'];casts={m[1]:m for m in cast.finditer(body)}
+        extensions={m[1]:m for m in extend.finditer(body)};edits=[];claimed=set()
+        uses=lambda name:len(re.findall(r'(?<![-A-Za-z$._0-9])'+re.escape(name)+r'(?![-A-Za-z$._0-9])',body))
+        for sub in subtract.finditer(body):
+            lhs,rhs=sub[4],sub[5];left,right=extensions.get(lhs),extensions.get(rhs)
+            if left is None or right is None or lhs==rhs:continue
+            bits=int(sub['bits']);index=3 if bits==32 else 4
+            if bits==16 and sub['flag']:continue
+            a,b=casts.get(left[index]),casts.get(right[index])
+            if a is None or b is None or left[index]==right[index]:continue
+            names=(a[1],b[1],left[1],right[1]);comparison=None
+            if bits==16:
+                for cmp in re.finditer(rf'^\s*({ssa}) = icmp (eq|ne) i16 ({ssa}), ({ssa})\s*$',body,re.M):
+                    if {cmp[3],cmp[4]}!={lhs,rhs} or cmp.start()<sub.end():continue
+                    # The modular difference must dominate the comparison in
+                    # the same basic block; never rewrite ordered comparisons.
+                    if re.search(r'^\S.*:|^\s*(br|switch|ret|invoke|unreachable)\b',body[sub.end():cmp.start()],re.M):continue
+                    comparison=cmp;break
+            expected=(2,2,3 if comparison else 2,3 if comparison else 2)
+            if any(uses(name)!=count or name in claimed for name,count in zip(names,expected)):continue
+            claimed.update(names)
+            result=sub[1];tail=''
+            if bits==16:
+                # (lo16(a)-lo16(b)) mod 2**16 == lo16(a-b). This does
+                # not license arbitrary integer-to-pointer reconstruction.
+                result=sub[1]+'.stcxx_wide'
+                while re.search(re.escape(result)+r'(?![-A-Za-z$._0-9])',body):result+='_'
+                tail=f'  {sub[1]} = trunc i32 {result} to i16\n'
+                if comparison:
+                    edits.append((comparison.start(),comparison.end(),f'\n  {comparison[1]} = icmp {comparison[2]} i16 {sub[1]}, 0\n'))
+            edits.extend([(a.start(),a.end(),'\n'),(b.start(),b.end(),'\n'),
+                          (left.start(),left.end(),f'\n  {left[1]} = ptrtoint ptr {a[2]} to i32\n'),
+                          (right.start(),right.end(),f'\n  {right[1]} = ptrtoint ptr {b[2]} to i32\n'),
+                          (sub.start(),sub.end(),f'\n  {result} = sub i32 {lhs}, {rhs}\n'+tail)])
+            records.append(dict(result=sub[1],left=a[2],right=b[2],native_bits=24,result_bits=bits))
+        for start,end,replacement in sorted(edits,reverse=True):body=body[:start]+replacement+body[end:]
+        return match[0][:match.start('body')-match.start()]+body+'}'
+    return function.sub(rewrite,ir),records
+
+
+def replace_c_code(pattern: re.Pattern[str], replacement, payload: str) -> str:
+    """Replace matches in executable C tokens, never in data or comments."""
+    pieces: list[str] = []
+    position = 0
+    for match in pattern.finditer(mask_c_data(payload)):
+        original = pattern.match(payload, match.start())
+        require(original is not None and original.end() == match.end(),
+                'C rewrite crosses an opaque token')
+        pieces.extend((payload[position:match.start()],
+                       replacement(original) if callable(replacement) else original.expand(replacement)))
+        position = match.end()
+    pieces.append(payload[position:])
+    return ''.join(pieces)
+
+
+def replace_c_token(payload: str, old: str, new: str) -> str:
+    return replace_c_code(re.compile(re.escape(old)), lambda _match: new, payload)
+
+
 def require_count(text: str, needle: str, expected: int, label: str) -> None:
     observed = text.count(needle)
     require(
@@ -119,6 +666,7 @@ def read_target(ir: str) -> tuple[str, str]:
 
 
 def collect_opcodes(ir: str) -> list[str]:
+    ir = mask_llvm_data(ir)
     observed: set[str] = set()
     in_function = False
     for line in ir.splitlines():
@@ -147,6 +695,31 @@ def collect_opcodes(ir: str) -> list[str]:
 
 
 def collect_intrinsics(ir: str) -> list[str]:
+    ir = mask_llvm_data(ir)
+    invariant_calls=set()
+    for function in re.finditer(r'^define[^\n]*\{\n(.*?)^\}',ir,re.M|re.S):
+        body=function.group(1)
+        for line in body.splitlines():
+            if '@llvm.invariant.start.p0' not in line:
+                continue
+            match=re.fullmatch(
+                r'\s*(%[-A-Za-z$._0-9]+) = (?:tail )?call(?: addrspace\(1\))? ptr '
+                r'@llvm\.invariant\.start\.p0\(i64 [0-9]+, ptr (?:nonnull )?[@%][-A-Za-z$._0-9]+\)(?: #[0-9]+)?',line)
+            require(match is not None,'unsupported invariant.start call shape')
+            require(len(re.findall(re.escape(match[1])+r'(?![-A-Za-z$._0-9])',body))==1,
+                    'invariant.start token must be unused')
+            invariant_calls.add(line)
+    for line in ir.splitlines():
+        if '@llvm.invariant.start.p0' in line and line not in invariant_calls:
+            require(re.fullmatch(r'\s*declare ptr @llvm\.invariant\.start\.p0\(i64 immarg, ptr(?: nocapture)?\)(?: addrspace\(1\))?(?: #[0-9]+)?\s*',line) is not None,
+                    'unsupported invariant.start declaration or use')
+        if '@llvm.assume' not in line:
+            continue
+        require(re.fullmatch(
+            r'\s*(?:declare void @llvm\.assume\(i1(?: noundef)?\)(?: addrspace\(1\))?'
+            r'|(?:tail )?call(?: addrspace\(1\))? void @llvm\.assume\(i1 (?:%[-A-Za-z$._0-9]+|true|false)\))'
+            r'(?: #[0-9]+)?\s*', line) is not None,
+            'unsupported llvm.assume signature, operand bundle or use')
     names = sorted(
         name for name in set(re.findall(r"@((?:llvm\.)[A-Za-z0-9_.$-]+)", ir))
         if not name.startswith("llvm.global_")
@@ -174,6 +747,7 @@ def audit_pointer_integer_conversions(ir: str) -> dict[str, object]:
     address-space gates.
     """
 
+    ir = mask_llvm_data(ir)
     conversions = re.findall(
         r"^\s*(?:%[^=]+\s*=\s*)?ptrtoint\s+ptr\s+.+\s+to\s+(i[0-9]+)\s*$",
         ir,
@@ -203,6 +777,7 @@ def audit_pointer_integer_conversions(ir: str) -> dict[str, object]:
 
 
 def audit_canary_traps(ir: str, intrinsics: list[str]) -> list[str]:
+    ir = mask_llvm_data(ir)
     if "llvm.trap" not in intrinsics:
         return []
     callers: list[str] = []
@@ -271,9 +846,13 @@ def audit_ir(ir: str, expected_triple: str, expected_layout: str) -> dict[str, o
     triple, layout = read_target(ir)
     require(triple == expected_triple, f"unexpected target triple: {triple}")
     require(layout == expected_layout, f"unexpected target DataLayout: {layout}")
+    native_aggregate_abi = audit_native_aggregate_abi(
+        ir, ('setup', 'loop', '__stcxx_run_global_ctors'))
 
+    value_audit_ir, ignored_pointer_arguments = audit_ignored_pointer_arguments(ir)
     forbidden = [
-        name for name, pattern in FORBIDDEN_IR_PATTERNS.items() if pattern.search(ir)
+        name for name, pattern in FORBIDDEN_IR_PATTERNS.items()
+        if pattern.search(value_audit_ir)
     ]
     require(not forbidden, "forbidden LLVM IR category: " + ", ".join(forbidden))
 
@@ -305,6 +884,8 @@ def audit_ir(ir: str, expected_triple: str, expected_layout: str) -> dict[str, o
 
     return {
         "target_triple": triple,
+        "native_aggregate_abi": native_aggregate_abi,
+        "ignored_pointer_arguments": ignored_pointer_arguments,
         "data_layout": layout,
         "constructors": constructors,
         "observed_opcodes": opcodes,
@@ -343,29 +924,46 @@ def extract_cbe_fcmp_helpers(
 ) -> tuple[list[str], list[str]]:
     """Retain the pinned CBE's pure floating-comparison helper definitions."""
 
+    expressions={'false':'0','true':'1','ord':'X == X && Y == Y','uno':'X != X || Y != Y',
+                 'oeq':'X == Y','ogt':'X > Y','oge':'X >= Y','olt':'X < Y','ole':'X <= Y',
+                 'one':'X != Y && llvm_fcmp_ord(X, Y)','une':'X != Y',
+                 **{name:'X '+op+' Y || llvm_fcmp_uno(X, Y)' for name,op in
+                    [('ueq','=='),('ugt','>'),('uge','>='),('ult','<'),('ule','<=')]}}
     helper_pattern = re.compile(
         r"^static __forceinline int (llvm_fcmp_[a-z0-9_]+)"
-        r"\(double X, double Y\) \{ return ([XY<>=!&| ()]+); \}$",
+        r"\(double X, double Y\) \{ return ([^\n{}]+?); \}$",
         re.MULTILINE,
     )
     helpers: list[str] = []
     names: list[str] = []
+    dependencies={}
     for match in helper_pattern.finditer(raw_prefix):
         name, expression = match.groups()
         require(name not in names, f"duplicate LLVM-CBE floating helper: {name}")
-        require("X" in expression and "Y" in expression,
+        expected=expressions.get(name.removeprefix('llvm_fcmp_'))
+        expression=expression.rstrip(';')
+        require(expected is not None and re.sub(r'\s+','',expression)==re.sub(r'\s+','',expected),
                 f"malformed LLVM-CBE floating helper: {name}")
+        dependencies[name]=set(re.findall(r'\bllvm_fcmp_[a-z]+',expression))
+        expression=expression.replace('llvm_fcmp_ord(X, Y)','(X == X && Y == Y)').replace('llvm_fcmp_uno(X, Y)','(X != X || Y != Y)')
         names.append(name)
         # The qualified STC ABI defines both source-level float and double as
         # IEEE binary32.  Use float in the SDCC bridge to avoid its diagnostic
         # for an unsupported wider double spelling while preserving values.
-        helpers.append(
-            f"static __forceinline int {name}(float X, float Y) "
-            f"{{ return {expression}; }}"
-        )
-    referenced = sorted(set(re.findall(r"\b(llvm_fcmp_[a-z0-9_]+)\s*\(", payload)))
+        predicate=name.removeprefix('llvm_fcmp_')
+        condition={'false':'0','true':'1','oeq':'r == 0','ogt':'r == 1',
+                   'oge':'r == 0 || r == 1','olt':'r == -1','ole':'r <= 0',
+                   'one':'r != 0 && r != 2','ord':'r != 2',
+                   'ueq':'r == 0 || r == 2','ugt':'r > 0','uge':'r >= 0',
+                   'ult':'r == -1 || r == 2','ule':'r != 1','une':'r != 0','uno':'r == 2'}[predicate]
+        helpers.append(f"static __forceinline int {name}(float X, float Y) "
+                       f"{{ int r = __stcxx_fcmp_order32(X, Y); return {condition}; }}")
+    referenced = sorted(set(re.findall(r"\b(llvm_fcmp_[a-z0-9_]+)\s*\(", mask_c_data(payload))))
+    required=set(referenced)
+    for _ in names:
+        required.update(dep for name in tuple(required) for dep in dependencies.get(name,()))
     require(
-        referenced == sorted(names),
+        required == set(names),
         "LLVM-CBE floating helper definitions do not match payload calls: "
         f"defined {sorted(names)!r}, referenced {referenced!r}",
     )
@@ -374,7 +972,77 @@ def extract_cbe_fcmp_helpers(
         sorted(set(residual)) == sorted(names),
         "unrecognized LLVM-CBE floating comparison helper shape",
     )
+    if names:
+        # Native SDCC floating comparisons do not preserve LLVM's NaN and
+        # signed-zero predicates. Compare binary32 encodings using integers.
+        # C union type-punning is supported by both locked SDCC profiles.
+        helpers.insert(0,'''static __forceinline int __stcxx_fcmp_order32(float X, float Y) {
+  union { float f; uint32_t u; } a, b;
+  uint32_t ax, bx;
+  a.f = X; b.f = Y; ax = a.u; bx = b.u;
+  if ((ax & 0x7fffffffUL) > 0x7f800000UL ||
+      (bx & 0x7fffffffUL) > 0x7f800000UL) return 2;
+  if (((ax | bx) & 0x7fffffffUL) == 0 || ax == bx) return 0;
+  if ((ax ^ bx) & 0x80000000UL) return (ax & 0x80000000UL) ? -1 : 1;
+  if (ax & 0x80000000UL) return ax > bx ? -1 : 1;
+  return ax < bx ? -1 : 1;
+}''')
     return helpers, names
+
+
+def normalize_cbe_string_array_arguments(payload):
+    """Make audited global byte-array wrappers decay for native char APIs."""
+    types=set(re.findall(r'^struct (l_array_([1-9][0-9]*)_uint8_t) \{\n  uint8_t array\[\2\];\n\};',payload,re.M))
+    types={name for name,size in types}
+    arrays={name:bool(const) for const,kind,name in re.findall(
+        r'^static (const )?struct (l_array_[1-9][0-9]*_uint8_t) ([A-Za-z_]\w*)\s*(?:=|;)',payload,re.M) if kind in types}
+    signatures={name:{0:True} for name in ('strlen','strchr','strrchr','atoi','atol','atof','strtol','strtoul')}
+    signatures.update({name:{0:True,1:True} for name in ('strcmp','strncmp','strstr','strspn','strcspn')})
+    signatures.update({name:{0:False,1:True} for name in ('strcpy','strncpy','strcat','strncat')})
+    masked=mask_c_data(payload);edits=[];records=[]
+    for match in re.finditer(r'\b('+'|'.join(signatures)+r')\s*\(',masked):
+        depth=1;start=match.end();arguments=[];i=start
+        while i<len(masked) and depth:
+            char=masked[i]
+            if char=='(':depth+=1
+            elif char==')':
+                depth-=1
+                if not depth:arguments.append((start,i))
+            elif char==',' and depth==1:arguments.append((start,i));start=i+1
+            i+=1
+        if depth:continue
+        for index,is_const in signatures[match[1]].items():
+            if index>=len(arguments):continue
+            start,end=arguments[index];argument=masked[start:end].strip()
+            reference=re.fullmatch(r'\(&([A-Za-z_]\w*)\)',argument)
+            if not reference or reference[1] not in arrays:continue
+            symbol=reference[1]
+            if not is_const and arrays[symbol]:continue
+            edits.append((start,end,'((%schar *)&%s)'%('const ' if is_const else '',symbol)))
+            records.append(dict(callee=match[1],argument=index,symbol=symbol))
+    for start,end,value in sorted(edits,reverse=True):payload=payload[:start]+value+payload[end:]
+    return payload,records
+
+
+def normalize_cbe_static_byte_geps(payload):
+    """Preserve constant address relocations as pointer addition for SDCC.
+
+    SDCC rejects &((uint8_t *)&object)[constant] in static initializers but
+    accepts the equivalent byte-pointer addition. Only named mutable static
+    objects and bounded signed i24/i32/i64 constant CBE spellings are recognized.
+    """
+    objects=set(re.findall(r'^static struct [A-Za-z_]\w* ([A-Za-z_]\w*)\s*(?:=|;)',payload,re.M))
+    initializer=re.compile(r'^static (?:const )?struct [A-Za-z_]\w* [A-Za-z_]\w* = [^\n]+;$',re.M)
+    gep=re.compile(r'\(\(\(&\(\(uint8_t\*\)\(&([A-Za-z_]\w*)\)\)\[\(\((?:signed _BitInt\(24\)|int32_t|int64_t)\)(-?[0-9]+)\)\]\)\)\)')
+    records=[]
+    def change(match):
+        def address(m):
+            symbol,offset=m[1],int(m[2])
+            if symbol not in objects or not -(1<<23)<=offset<(1<<23):return m[0]
+            records.append(dict(symbol=symbol,byte_offset=offset))
+            return f'(((uint8_t*)(&{symbol})) + ({offset}L))'
+        return replace_c_code(gep,address,match[0])
+    return initializer.sub(change,payload),records
 
 
 def extract_cbe_fp_constant_typedefs(
@@ -387,7 +1055,7 @@ def extract_cbe_fp_constant_typedefs(
         ("ConstantDoubleTy", "typedef uint64_t ConstantDoubleTy;"),
     )
     unsupported = sorted(set(re.findall(
-        r"\bConstant(?:FP80|FP128)Ty\b", raw_prefix + payload
+        r"\bConstant(?:FP80|FP128)Ty\b", mask_c_data(raw_prefix + payload)
     )))
     require(
         not unsupported,
@@ -403,7 +1071,7 @@ def extract_cbe_fp_constant_typedefs(
         )
         observed = [match.group(0).strip()
                     for match in declaration_pattern.finditer(raw_prefix)]
-        referenced = re.search(rf"\b{re.escape(name)}\b", payload) is not None
+        referenced = re.search(rf"\b{re.escape(name)}\b", mask_c_data(payload)) is not None
         require(
             len(observed) == (1 if referenced else 0),
             f"LLVM-CBE {name} declaration does not match payload use",
@@ -484,7 +1152,7 @@ def extract_cbe_fpclass_helpers(
         observed[name] = match.group(0).strip()
 
     referenced = sorted(set(re.findall(
-        r"\b(llvm_cbe_is_fpclass_f(?:32|64))\s*\(", payload
+        r"\b(llvm_cbe_is_fpclass_f(?:32|64))\s*\(", mask_c_data(payload)
     )))
     require(
         referenced == sorted(observed),
@@ -492,7 +1160,7 @@ def extract_cbe_fpclass_helpers(
         f"defined {sorted(observed)!r}, referenced {referenced!r}",
     )
     residual = sorted(set(re.findall(
-        r"\bllvm_cbe_is_fpclass_[A-Za-z0-9_]+\b", raw_prefix + payload
+        r"\bllvm_cbe_is_fpclass_[A-Za-z0-9_]+\b", mask_c_data(raw_prefix + payload)
     )))
     require(
         residual == referenced,
@@ -526,7 +1194,7 @@ def extract_cbe_native_string_header(
     )
     name_pattern = "|".join(string_names)
     referenced = sorted(set(re.findall(
-        rf"\b({name_pattern})\s*\(", payload
+        rf"\b({name_pattern})\s*\(", mask_c_data(payload)
     )))
     declaration_pattern = re.compile(
         rf"^(?:extern\s+)?(?:void\s*\*|[A-Za-z_][A-Za-z0-9_]*)\s+"
@@ -600,8 +1268,8 @@ def normalize_cbe_function_typedefs(
     adapter cannot silently reorder arbitrary C declarations.
     """
 
-    function_marker = "/* Function definitions */"
-    type_marker = "/* Types Definitions */"
+    function_marker = "\n/* Function definitions */\n"
+    type_marker = "\n/* Types Definitions */\n"
     require_count(payload, function_marker, 1, "function typedef marker")
     require_count(payload, type_marker, 1, "type definition marker")
     prefix, after_function_marker = payload.split(function_marker, 1)
@@ -620,7 +1288,7 @@ def normalize_cbe_function_typedefs(
             continue
         typedefs.append((int(match.group(2)), match.group(1), line.rstrip()))
     require(not unfamiliar, f"unexpected function typedef block line(s): {unfamiliar!r}")
-    require(typedefs, "LLVM-CBE function typedef block is empty")
+    # Programs with no indirect calls legitimately have no function typedefs.
     names = [name for _, name, _ in typedefs]
     require(len(names) == len(set(names)), "duplicate LLVM-CBE function typedef alias")
     ordered = sorted(typedefs, key=lambda entry: (entry[0], entry[1], entry[2]))
@@ -638,12 +1306,41 @@ def normalize_cbe_function_typedefs(
     return rewritten, before, after
 
 
+def normalize_mcs251_indirect_calls(payload: str) -> tuple[str, list[str]]:
+    """Use SDCC's integer bridge between equal-width program/data pointers."""
+    types=set(re.findall(r'^typedef [^\n]+ (l_fptr_[0-9]+)\(',payload,re.M))
+    pattern=re.compile(r'\(\((?P<type>l_fptr_[0-9]+)\*\)\(void\*\)'
+                       r'(?P<value>_[0-9]+|\(\(\(void\*\)\(uintptr_t\)_[0-9]+\)\))\)(?=\()')
+    records=[]
+    def rewrite(match):
+        require(match['type'] in types,'indirect call has no function typedef')
+        records.append(match['type']+':'+match['value'])
+        return '(('+match['type']+'*)(uintptr_t)'+match['value']+')'
+    return replace_c_code(pattern,rewrite,payload),records
+
+
+def normalize_cbe_fabs_helpers(payload: str) -> tuple[str, list[str]]:
+    """Clear the IEEE binary32 sign bit, preserving NaN payloads and +0."""
+    name='llvm_OC_fabs_OC_f32'
+    pattern=re.compile(r'^static __forceinline float '+name+r'\(float a\) \{\n  float r = fabsf\(a\);\n  return r;\n\}',re.M)
+    replacement='''static __forceinline float llvm_OC_fabs_OC_f32(float a) {
+  union { float value; uint32_t bits; } repr;
+  repr.value = a;
+  repr.bits &= 0x7fffffffUL;
+  return repr.value;
+}'''
+    rewritten,count=pattern.subn(replacement,payload)
+    definitions=re.findall(r'^static __forceinline float llvm_OC_fabs_OC_[A-Za-z0-9_]+\(',mask_c_data(payload),re.M)
+    require(count==len(definitions) and count<=1,'unsupported CBE fabs helper body or width')
+    return rewritten, [name] if count else []
+
+
 def remove_sdcc_duplicate_const_declarations(
     payload: str,
 ) -> tuple[str, list[str], list[str]]:
-    declaration_marker = "/* Global Variable Declarations */"
-    function_marker = "/* Function Declarations */"
-    definition_marker = "/* Global Variable Definitions and Initialization */"
+    declaration_marker = "\n/* Global Variable Declarations */\n"
+    function_marker = "\n/* Function Declarations */\n"
+    definition_marker = "\n/* Global Variable Definitions and Initialization */\n"
     require_count(payload, declaration_marker, 1, "global variable declaration marker")
     require_count(payload, function_marker, 1, "function declaration marker")
     require_count(payload, definition_marker, 1, "global variable definition marker")
@@ -730,9 +1427,14 @@ def normalize_cbe_address_roundtrips(payload: str) -> tuple[str, list[str]]:
     )
     byte_offset_pointer_load_pattern = re.compile(
         r"^(?P<indent>\s*)(?P<destination>_[0-9]+\s*=\s*)"
-        r"\*\((?P<load_type>void\*\*)\)"
+        r"\*\((?P<load_type>void\*\*|(?:u?int(?:8|16|32|64)_t|float|double)\*)\)"
         r"\(\(\(&\(\((?P<element_type>uint8_t\*)\)(?P<base>_[0-9]+)\)"
         r"\[(?P<index>.+)\]\)\)\);\s*$"
+    )
+    byte_offset_pointer_store_pattern = re.compile(
+        r"^(?P<indent>\s*)\*\((?P<store_type>void\*\*|(?:u?int(?:8|16|32|64)_t|float|double)\*)\)"
+        r"\(\(\(&\(\(uint8_t\*\)(?P<base>_[0-9]+)\)"
+        r"\[(?P<index>.+)\]\)\)\)\s*=\s*(?P<value>.+);\s*$"
     )
     store_pattern = re.compile(
         r"^(?P<indent>\s*)"
@@ -765,6 +1467,15 @@ def normalize_cbe_address_roundtrips(payload: str) -> tuple[str, list[str]]:
                 f"line {line_number}: generic byte-offset pointer load"
             )
             continue
+        byte_store = byte_offset_pointer_store_pattern.match(line)
+        if byte_store is not None:
+            fields = byte_store.groupdict()
+            rewritten_lines.append(
+                f"{fields['indent']}*({fields['store_type']})(((uint8_t*){fields['base']}) + "
+                f"({fields['index']})) = {fields['value']};"
+            )
+            rewrites.append(f"line {line_number}: generic byte-offset pointer store")
+            continue
         store_match = store_pattern.match(line)
         if store_match is not None:
             fields = store_match.groupdict()
@@ -788,6 +1499,143 @@ def normalize_cbe_address_roundtrips(payload: str) -> tuple[str, list[str]]:
     return rewritten, rewrites
 
 
+def normalize_cbe_vtable_addresses(payload: str) -> tuple[str, list[str]]:
+    """Express audited vtable/VTT addresses as pointer arithmetic.
+
+    A vtable without methods can have its address point exactly one past the
+    last entry. SDCC diagnoses CBE's redundant &array[N] as a load. Array + N
+    is an address expression and also permits an explicit generic-pointer
+    conversion where opaque LLVM pointers erased pointee constness.
+    """
+    structures = dict(re.findall(r'^struct ([A-Za-z_][A-Za-z0-9_]*) \{\n(.*?)^\};',
+                                 payload, re.MULTILINE | re.DOTALL))
+    tables = {name: typename for typename, name in re.findall(
+        r'^static const struct ([A-Za-z_][A-Za-z0-9_]*) (_ZT[VTC][A-Za-z0-9_]+)\s*=',
+        payload, re.MULTILINE)}
+    # Propagate const along the exact read-only VTT argument aliases in base
+    # constructors before materializing calls from read-only code memory.
+    vtt_callees = set(re.findall(
+        r'^  ([A-Za-z_][A-Za-z0-9_]*)\([^;\n]*&_ZTT[A-Za-z0-9_]+[^;\n]*\);$',
+        payload, re.MULTILINE))
+    for callee in sorted(vtt_callees):
+        function = re.search(
+            rf'^static void {re.escape(callee)}\(void\* _[0-9]+, void\* (?P<arg>_[0-9]+)\) \{{\n(?P<body>.*?)^\}}',
+            payload, re.MULTILINE | re.DOTALL)
+        require(function is not None, 'unsupported VTT constructor signature')
+        aliases = {function.group('arg')}
+        body = function.group('body')
+        copies = re.findall(r'^  (_[0-9]+) = (_[0-9]+);$', body, re.MULTILINE)
+        for _ in range(len(copies)+1):
+            aliases.update(dst for dst, src in copies if src in aliases)
+        for line in body.splitlines():
+            if not any(re.search(r'\b'+re.escape(alias)+r'\b', line) for alias in aliases):
+                continue
+            require(
+                re.fullmatch(r'  void\* _[0-9]+;(?:\s*/\*.*\*/)?', line) is not None
+                or re.fullmatch(r'  _[0-9]+ = _[0-9]+;', line) is not None
+                or re.fullmatch(r'  _[0-9]+ = \*\(void\*\*\)_[0-9]+;', line) is not None,
+                'VTT argument escapes the read-only constructor alias chain')
+        for alias in aliases:
+            body = re.sub(r'\bvoid\* '+re.escape(alias)+r'\b', 'const void* '+alias, body)
+            body = body.replace('*(void**)'+alias+';', '*(void* const*)'+alias+';')
+        replacement = function.group(0).replace(function.group('body'), body)
+        replacement = replacement.replace(', void* '+function.group('arg')+')', ', const void* '+function.group('arg')+')')
+        payload = payload[:function.start()] + replacement + payload[function.end():]
+        payload = re.sub(rf'^(static void {re.escape(callee)}\(void\* _[0-9]+, )void\* (_[0-9]+\))',
+                         r'\1const void* \2', payload, flags=re.MULTILINE)
+    pattern = re.compile(
+        r'\(\(\(&\(&\(&(?P<table>_ZT[VC][A-Za-z0-9_]+)\)->field(?P<field>[0-9]+)'
+        r'\)->array\[\(\(int32_t\)(?P<index>[0-9]+)\)\]\)\)\)')
+    records = []
+
+    # LLVM's optimizer can flatten a vtable GEP to a byte address. Validate
+    # the entire table layout and slot boundary before restoring __code.
+    flat_pattern = re.compile(
+        r'\(\(\(&\(\(uint8_t\*\)\(\(void\*\)\(const void\*\)&'
+        r'(?P<table>_ZT[VC][A-Za-z0-9_]+)\)\)\['
+        r'\(\(signed _BitInt\(24\)\)(?P<offset>[0-9]+)\)\]\)\)\)')
+
+    def rewrite_flat(match):
+        name, offset = match.group('table'), int(match.group('offset'))
+        require(name in tables, 'flattened vtable address lacks local definition')
+        fields = re.findall(r'  struct ([A-Za-z_][A-Za-z0-9_]*) field([0-9]+);\n',
+                            structures.get(tables[name], ''))
+        require(fields and ''.join(f'  struct {t} field{n};\n' for t,n in fields)
+                == structures[tables[name]], 'unsupported flattened vtable layout')
+        size = 0
+        for typename, _ in fields:
+            array = re.fullmatch(r'  void\* array\[([0-9]+)\];\n', structures.get(typename, ''))
+            require(array is not None, 'flattened vtable contains a non-pointer array')
+            size += 3 * int(array.group(1))
+        require(offset % 3 == 0 and offset <= size, 'flattened vtable address is outside its pointer slots')
+        records.append(name+'+bytes:'+str(offset))
+        return f'((void *)((const uint8_t __code *)&{name} + {offset}))'
+
+    payload = flat_pattern.sub(rewrite_flat, payload)
+
+    def rewrite(match):
+        name, field, index = match.group('table', 'field', 'index')
+        require(name in tables, 'vtable address lacks local definition')
+        member = re.search(r'  struct ([A-Za-z_][A-Za-z0-9_]*) field'+field+r';',
+                           structures.get(tables[name], ''))
+        require(member is not None, 'vtable address references unknown field')
+        array = re.fullmatch(r'  void\* array\[([0-9]+)\];\n', structures.get(member.group(1), ''))
+        require(array is not None and int(index) <= int(array.group(1)),
+                'vtable address point exceeds its array')
+        records.append(name+'.field'+field+'+'+index)
+        offset = int(index) * 3
+        for previous in range(int(field)):
+            entry = re.search(r'  struct ([A-Za-z_][A-Za-z0-9_]*) field'+str(previous)+r';', structures[tables[name]])
+            require(entry is not None, 'vtable layout contains a non-pointer-array field')
+            dim = re.fullmatch(r'  void\* array\[([0-9]+)\];\n', structures.get(entry.group(1), ''))
+            require(dim is not None, 'vtable layout contains a non-pointer-array field')
+            offset += int(dim.group(1)) * 3
+        return f'((void *)((const uint8_t __code *)&{name} + {offset}))'
+
+    payload = pattern.sub(rewrite, payload)
+    vtt_pattern = re.compile(
+        r'\(\(\(&\(&(?P<table>_ZTT[A-Za-z0-9_]+)\)->array'
+        r'\[\(\(int64_t\)(?P<index>[0-9]+)\)\]\)\)\)')
+
+    def rewrite_vtt(match):
+        name, index = match.group('table', 'index')
+        require(name in tables, 'VTT address lacks local definition')
+        array = re.fullmatch(r'  void\* array\[([0-9]+)\];\n', structures.get(tables[name], ''))
+        require(array is not None and int(index) < int(array.group(1)),
+                'VTT argument exceeds its array')
+        records.append(name+'+'+index)
+        return f'((const void *)((const uint8_t __code *)&{name} + {int(index)*3}))'
+
+    return vtt_pattern.sub(rewrite_vtt, payload), records
+
+
+def normalize_cbe_integer_negation(payload: str) -> tuple[str, list[str]]:
+    """Keep LLVM's modular negation defined at each signed minimum.
+
+    CBE emits a signed parameter and unary minus even for LLVM `sub 0, x`
+    originating from unsigned C++. In C, negating INT_MIN is undefined.
+    Calculate in an unsigned type at least as wide, then truncate normally.
+    """
+    pattern = re.compile(
+        r'^static __forceinline uint(?P<bits>8|16|32|64)_t '
+        r'(?P<name>llvm_neg_u(?P=bits))\(int(?P=bits)_t a\) \{\n'
+        r'  uint(?P=bits)_t r = -a;\n  return r;\n\}', re.MULTILINE,
+    )
+    names: list[str] = []
+
+    def rewrite(match: re.Match[str]) -> str:
+        bits = match['bits']
+        math_bits = '64' if bits == '64' else '32'
+        names.append(match['name'])
+        return (f'static __forceinline uint{bits}_t {match["name"]}(int{bits}_t a) {{\n'
+                f'  uint{bits}_t r = (uint{bits}_t)((uint{math_bits}_t)0 - (uint{math_bits}_t)a);\n'
+                '  return r;\n}')
+
+    result = replace_c_code(pattern, rewrite, payload)
+    require(len(names) == len(set(names)), 'duplicate CBE integer negation helper')
+    return result, names
+
+
 def normalize_cbe_u24_negation(payload: str) -> tuple[str, int]:
     """Repair llvm-cbe's malformed helper for a non-native 24-bit integer.
 
@@ -805,7 +1653,7 @@ def normalize_cbe_u24_negation(payload: str) -> tuple[str, int]:
     )
     replacement = (
         "static __forceinline uint32_t llvm_neg_u24(int32_t a) {\n"
-        "  uint32_t r = ((uint32_t)(-a)) & 16777215UL;\n"
+        "  uint32_t r = (0UL - (uint32_t)a) & 16777215UL;\n"
         "  return r;\n"
         "}"
     )
@@ -865,7 +1713,7 @@ def normalize_cbe_u32_power_of_two_division(
         mask = divisor - 1
         return f"(((uint32_t){dividend}) & {mask}UL)"
 
-    return call_pattern.sub(rewrite, payload), rewrites
+    return replace_c_code(call_pattern, rewrite, payload), rewrites
 
 
 def decode_cbe_byte_string(contents: str) -> list[int]:
@@ -925,45 +1773,143 @@ def decode_cbe_byte_string(contents: str) -> list[int]:
     return decoded
 
 
-def normalize_cbe_exact_byte_array_initializers(
-    payload: str,
-) -> tuple[str, list[str]]:
-    """Rewrite non-NUL LLVM byte arrays so SDCC does not append a byte.
+def _c_initializer_items(text: str) -> list[str]:
+    """Split one brace level, keeping nested expressions and literals intact."""
+    require(text.startswith('{') and text.endswith('}'), 'aggregate initializer needs braces')
+    inner = text[1:-1]
+    masked = mask_c_data(inner)
+    stack: list[str] = []
+    pairs = {')': '(', ']': '[', '}': '{'}
+    result: list[str] = []
+    start = 0
+    for index, char in enumerate(masked):
+        if char in '([{':
+            stack.append(char)
+        elif char in ')]}':
+            require(bool(stack) and stack.pop() == pairs[char], 'unbalanced C initializer')
+        elif char == ',' and not stack:
+            result.append(inner[start:index].strip())
+            start = index + 1
+    require(not stack, 'unbalanced C initializer')
+    tail = inner[start:].strip()
+    if tail:
+        result.append(tail)
+    require(all(result), 'empty C initializer element')
+    return result
 
-    LLVM-CBE spells both C strings and arbitrary constant ``[N x i8]`` arrays
-    as C string literals inside a wrapper struct.  When the LLVM array already
-    contains exactly N non-NUL bytes, C adds an implicit terminator and SDCC
-    diagnoses/truncates it.  Convert only that exact, validated shape to a
-    nested numeric initializer; ordinary N-1-byte C strings remain unchanged.
+
+def normalize_cbe_exact_byte_array_initializers(payload: str) -> tuple[str, list[str]]:
+    """Normalize byte literals and implicit zeroes using actual CBE types.
+
+    Descend through array wrappers and records at any depth. A full-width
+    byte literal must not acquire an extra NUL in SDCC. Uninitialized const
+    aggregates need explicit, recursively braced zero initialization there.
+    Only CBE global definitions are visited; expressions/literal contents
+    elsewhere are never interpreted as declarations.
     """
+    types: dict[str, list[tuple[str, int | None]]] = {}
+    for match in re.finditer(r'^struct (\w+) \{\n(.*?)^\};', payload, re.MULTILINE | re.DOTALL):
+        fields: list[tuple[str, int | None]] = []
+        for line in match.group(2).splitlines():
+            field = re.fullmatch(r'\s*(.+?)\s+(?:array|field[0-9]+)(?:\[([0-9]+)\])?;\s*', line)
+            if field is None:
+                fields = []
+                break
+            fields.append((field[1], int(field[2]) if field[2] else None))
+        if fields:
+            require(match[1] not in types, f'duplicate CBE aggregate type: {match[1]}')
+            wrapper = re.fullmatch(r'l_array_([0-9]+)_(.+)', match[1])
+            if wrapper:
+                element = wrapper[2]
+                if element.startswith('struct_AC_'):
+                    element = 'struct ' + element[len('struct_AC_'):]
+                require(len(fields) == 1 and fields[0][1] == int(wrapper[1]) and
+                        (element != 'uint8_t' or fields[0][0] == 'uint8_t') and
+                        (not element.startswith('struct ') or fields[0][0] == element),
+                        f'CBE array wrapper name/layout mismatch: {match[1]}')
+            types[match[1]] = fields
+    literal = re.compile(r'"((?:\\.|[^"\\])*)"\Z', re.DOTALL)
 
-    pattern = re.compile(
-        r'^static const struct (l_array_([0-9]+)_uint8_t) '
-        r'([A-Za-z_][A-Za-z0-9_]*) = \{ "((?:\\.|[^"\\])*)" \};$',
-        re.MULTILINE,
-    )
-    rewritten_symbols: list[str] = []
+    def zero(type_name: str, count: int | None, active: tuple[str, ...] = ()) -> str:
+        if count is not None:
+            require(count > 0, 'zero-sized CBE array is unsupported')
+            return '{ ' + zero(type_name, None, active) + ' }'
+        if type_name.startswith('struct '):
+            name = type_name[7:]
+            require(name in types and name not in active, f'unsupported/cyclic CBE aggregate: {name}')
+            return '{ ' + ', '.join(zero(t, n, active + (name,)) for t, n in types[name]) + ' }'
+        return '0'
+
+    def visit(type_name: str, count: int | None, value: str, symbol: str) -> tuple[str, bool]:
+        if count is not None:
+            text_match = literal.fullmatch(value)
+            if text_match:
+                require(type_name == 'uint8_t', f'non-byte CBE string initializer in {symbol}')
+                values = decode_cbe_byte_string(text_match[1])
+                require(len(values) in (count - 1, count), f'LLVM-CBE byte initializer length mismatch for {symbol}')
+                if len(values) == count:
+                    return '{ ' + ', '.join(f'{byte}u' for byte in values) + ' }', True
+                return value, False
+            items = _c_initializer_items(value)
+            require(0 < len(items) <= count, f'CBE array initializer extent mismatch for {symbol}')
+            if type_name == 'uint8_t':
+                for item in items:
+                    numeric = re.fullmatch(r'(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*', item)
+                    require(numeric is not None, f'unsupported CBE byte value in {symbol}')
+                    digits = numeric[1]
+                    number = int(digits, 16 if digits.lower().startswith('0x') else 10)
+                    require(number <= 255, f'invalid CBE byte value in {symbol}')
+            children = [visit(type_name, None, item, symbol) for item in items]
+        elif type_name.startswith('struct '):
+            name = type_name[7:]
+            require(name in types, f'unsupported CBE aggregate definition: {name}')
+            items = _c_initializer_items(value)
+            fields = types[name]
+            require(0 < len(items) <= len(fields), f'CBE record initializer extent mismatch for {symbol}')
+            children = [visit(t, n, item, symbol) for (t, n), item in zip(fields, items)]
+        else:
+            return value, False
+        changed = any(change for _, change in children)
+        return ('{ ' + ', '.join(item for item, _ in children) + ' }' if changed else value), changed
+
+    rewritten: list[str] = []
+    definition = re.compile(r'^((?:static )?(?:const )?)struct (\w+) (\w+)(?: = (.*))?;$', re.MULTILINE)
 
     def rewrite(match: re.Match[str]) -> str:
-        type_name, count_text, symbol, contents = match.groups()
-        count = int(count_text)
-        values = decode_cbe_byte_string(contents)
-        if len(values) == count - 1:
-            return match.group(0)
-        require(
-            len(values) == count,
-            f"LLVM-CBE byte initializer length mismatch for {symbol}: "
-            f"type has {count}, literal has {len(values)}",
-        )
-        rewritten_symbols.append(symbol)
-        initializer = ", ".join(f"{value}u" for value in values)
-        return (
-            f"static const struct {type_name} {symbol} = "
-            f"{{ {{ {initializer} }} }};"
-        )
+        prefix, type_name, symbol, value = match.groups()
+        if type_name not in types:
+            # Not a validated CBE record shape; later compile/audit rejects it.
+            return match[0]
+        if value is None:
+            if 'const ' not in prefix:
+                return match[0]  # Mutable zero storage is initialized by startup.
+            value = zero('struct ' + type_name, None)
+            changed = True
+        else:
+            value, changed = visit('struct ' + type_name, None, value, symbol)
+        if not changed:
+            return match[0]
+        rewritten.append(symbol)
+        return f'{prefix}struct {type_name} {symbol} = {value};'
 
-    rewritten = pattern.sub(rewrite, payload)
-    return rewritten, rewritten_symbols
+    marker = '\n/* Global Variable Definitions and Initialization */\n'
+    if marker in payload:
+        prefix, definitions = payload.split(marker, 1)
+        end_marker = '\n/* LLVM Intrinsic Builtin Function Bodies */\n'
+        require(end_marker in definitions, 'missing CBE end of global definitions')
+        definitions, suffix = definitions.split(end_marker, 1)
+        result = prefix + marker + definition.sub(rewrite, definitions) + end_marker + suffix
+    else:
+        # Also support isolated regression fragments containing only types and
+        # definitions. Never include a CBE declaration section in this mode.
+        require('/* Global Variable Declarations */' not in payload, 'missing CBE global definition marker')
+        result = definition.sub(rewrite, payload)
+    return result, rewritten
+
+
+def normalize_cbe_nested_byte_array_initializers(payload: str) -> tuple[str, list[str]]:
+    """Compatibility entry point; the type-driven pass handles every depth."""
+    return normalize_cbe_exact_byte_array_initializers(payload)
 
 
 def normalize_cbe_stateless_struct_returns(
@@ -1199,14 +2145,14 @@ def audit_and_adapt_cbe(
     constructors: list[dict[str, object]],
     abi_identity_symbol: str,
 ) -> tuple[str, dict[str, object]]:
-    marker = "/* Global Declarations */"
+    marker = "\n/* Global Declarations */\n"
     require_count(raw, marker, 1, "LLVM-CBE global declaration marker")
     raw_prefix, payload = raw.split(marker, 1)
     fcmp_helpers, fcmp_helper_names = extract_cbe_fcmp_helpers(raw_prefix, payload)
 
     forbidden = [
         name for name, pattern in FORBIDDEN_CBE_PAYLOAD.items()
-        if pattern.search(payload)
+        if pattern.search(mask_c_data(payload))
     ]
     require(not forbidden, "forbidden LLVM-CBE payload: " + ", ".join(forbidden))
 
@@ -1250,20 +2196,21 @@ def audit_and_adapt_cbe(
         len(expected_c_names),
         "host constructor attribute removal",
     )
-    payload = payload.replace(" __ATTRIBUTE_CTOR__", "")
-    require("__ATTRIBUTE_CTOR__" not in payload, "unconsumed constructor attribute")
+    payload = replace_c_token(payload, " __ATTRIBUTE_CTOR__", "")
+    require("__ATTRIBUTE_CTOR__" not in mask_c_data(payload), "unconsumed constructor attribute")
 
-    trap_count = payload.count("__builtin_trap();")
+    trap_count = mask_c_data(payload).count("__builtin_trap();")
     require(
         trap_count == 2,
         f"expected two audited abstract-base traps in CBE output, got {trap_count}",
     )
-    payload = payload.replace("__builtin_trap();", "stcxx_runtime_panic(5);")
+    payload = replace_c_token(payload, "__builtin_trap();", "stcxx_runtime_panic(5);")
 
     payload, function_typedef_order_before, function_typedef_order_after = (
         normalize_cbe_function_typedefs(payload)
     )
     payload, u24_negation_helpers_repaired = normalize_cbe_u24_negation(payload)
+    payload, integer_negation_helpers_repaired = normalize_cbe_integer_negation(payload)
     payload, u32_power_of_two_division_rewrites = (
         normalize_cbe_u32_power_of_two_division(payload)
     )
@@ -1362,6 +2309,7 @@ typedef unsigned char bool;
             u32_power_of_two_division_rewrites
         ),
         "exact_byte_array_initializers_rewritten": exact_byte_arrays_rewritten,
+        "integer_negation_helpers_repaired": integer_negation_helpers_repaired,
         "stateless_struct_returns_initialized": stateless_struct_returns_initialized,
         "single_block_pointer_temporaries_eliminated": single_block_pointer_temporaries_eliminated,
         "floating_comparison_helpers_preserved": fcmp_helper_names,

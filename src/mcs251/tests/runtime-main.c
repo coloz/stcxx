@@ -3,6 +3,9 @@
 
 __sfr __at (0x99) SBUF;
 __xdata __at (0x010020) volatile unsigned char high_data;
+static volatile __data unsigned char gptr_helper_result;
+static volatile __data unsigned char gptr_helper_flash_result;
+static const __code unsigned char gptr_helper_flash = 0x97;
 
 struct mcs251_index_pair
 {
@@ -139,7 +142,27 @@ main (void)
 #ifndef MCS251_SKIP_SETJMP
     int resumed;
 #endif
-    unsigned char passed = 1;
+    unsigned char passed;
+
+    /* New MCS251 code emits flat byte accesses directly, but precompiled
+       objects still use these runtime entry points. Exercise their DPX/A
+       ABI explicitly so rebuilding libc cannot silently remove coverage. */
+    __asm
+        .globl __gptrput
+        .globl __gptrget
+        mov dptr,#_high_data
+        mov dpxl,#(_high_data >> 16)
+        mov a,#0x69
+        ecall __gptrput
+        ecall __gptrget
+        mov _gptr_helper_result,a
+        mov dptr,#_gptr_helper_flash
+        mov dpxl,#(_gptr_helper_flash >> 16)
+        ecall __gptrget
+        mov _gptr_helper_flash_result,a
+    __endasm;
+    passed = high_data == 0x69 && gptr_helper_result == 0x69 &&
+             gptr_helper_flash_result == 0x97;
 
     middle_pair = &indexed_pairs[20];
     middle_pair[relative_index].second = 0x5a;

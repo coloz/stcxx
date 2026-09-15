@@ -109,6 +109,34 @@ void btree_add_symbol(struct symbol *s)
   wassert(s);
   block = s->_isparm ? 0 : s->block; // This is essentially a workaround. TODO: Ensure that the parameter block is placed correctly in the btree instead!
 
+  /* Inlining and copy propagation can keep a local's value alive outside
+     its lexical block (notably several inline return values in one full
+     expression). Sibling block slots may only overlap after all such uses
+     have finished. Lift the allocation to the common ancestor of the final
+     iCode definitions/uses, without changing the symbol's lexical scope. */
+  if (!s->_isparm && (TARGET_IS_MCS51 || TARGET_IS_MCS251))
+    {
+      std::list<symbol *> occupants;
+      occupants.push_back (s);
+      int livekey;
+      for (symbol *temp = (symbol *)hTabFirstItem (liveRanges, &livekey); temp;
+           temp = (symbol *)hTabNextItem (liveRanges, &livekey))
+        if (temp->usl.spillLoc == s || temp->prereqv == s)
+          occupants.push_back (temp);
+      for (symbol *value : occupants)
+        {
+          const int count = std::max (value->uses ? value->uses->size : 0,
+                                     value->defs ? value->defs->size : 0);
+          for (int key = 0; key < count; ++key)
+            if (bitVectBitValue (value->uses, key) || bitVectBitValue (value->defs, key))
+              {
+                iCode *ic = (iCode *)hTabItemWithKey (iCodehTab, key);
+                if (ic && bmap.find (ic->block) != bmap.end ())
+                  block = btree_lowest_common_ancestor (block, ic->block);
+              }
+        }
+    }
+
 #ifdef BTREE_DEBUG
   std::cout << "Adding symbol " << s->name << " at " << block << "\n";
 #endif
@@ -174,4 +202,3 @@ void btree_alloc(void)
       SPEC_STAK (currFunc->etype) += ssize;
     }
 }
-

@@ -104,3 +104,75 @@ Chip-specific Flash addresses, stack/heap limits and startup behavior belong
 to [arduino-stc51](../arduino-stc51/README.md). The existing C++ board profiles
 are experimental. Firmware validation and UART ISP are supplied separately
 by [stc-cli](../stc-cli/README.md).
+
+## Native ARM64 Mac frontend build
+
+`arduino/scripts/build-macos-frontend.py` builds the locked Clang 20.1.8 and
+LLVM-CBE sources on an ARM64 Mac using Apple Clang, the selected Apple SDK,
+LLVM 20.1.8 development files, CMake and Ninja. The build directory must be
+new. For Homebrew dependencies installed without global links:
+
+```sh
+mkdir -p .build
+PATH="/opt/homebrew/opt/cmake/bin:/opt/homebrew/opt/ninja/bin:$PATH" \
+  python3 arduino/scripts/build-macos-frontend.py \
+  --build-root "$PWD/.build/macos-frontend" --jobs 4
+python3 arduino/scripts/verify-macos-frontend-build.py \
+  --build "$PWD/.build/macos-frontend" \
+  --output "$PWD/.build/macos-frontend-verification"
+```
+
+The verified Homebrew LLVM dependency requires macOS 15, so the frontend
+defaults to deployment target 15.0. Changing that flag alone cannot establish
+compatibility with an older OS. The build records SDK/compiler identities,
+source patch checks, Mach-O dependencies and a before/after LLVM file inventory.
+The verifier exercises both STC profiles at O0/Oz and executes generated C
+return-identity checks on the Mac. These have passed on macOS 15.7.1 ARM64 with
+Apple SDK 15.5. These build probes alone do not qualify Arduino or physical MCU
+execution. Packaging and relocation checks have also passed on that native host:
+
+```sh
+python3 arduino/scripts/package-macos-frontend.py \
+  --build "$PWD/.build/macos-frontend" --output "$PWD/.build/macos-package"
+python3 arduino/scripts/verify-macos-frontend.py \
+  --package "/absolute/relocated package" --manifest-sha256 EXPECTED_SHA256 \
+  --output "$PWD/.build/macos-relocation-check" \
+  --deny-input-prefix "$PWD/.build/macos-frontend" \
+  --deny-input-prefix /opt/homebrew/Cellar/llvm@20/20.1.8 \
+  --deny-input-prefix /opt/homebrew/Cellar/zstd/1.5.7_1
+```
+
+Copy the complete staged package to the relocation path first. Obtain the
+expected manifest digest from the separate packager audit. The verifier checks
+the full inventory before running tools; each denial is tested against an
+otherwise readable source file. It executes the ABI and return-identity probes
+under that sandbox. Only copied Mach-O files are rewritten to private
+`@loader_path` dependencies and ad-hoc signed; all `LC_RPATH` entries are removed.
+Two complete source builds in different directories on that Mac produced
+identical Clang/CBE binaries and resource headers. After normalizing build-root
+prefixes in the packaged recipe and provenance, both builds also produced the
+same 54,382,979-byte frontend archive. Separate audits retain the actual build
+paths, original build reports and packaging commands. Both packages passed
+sandbox probes denying access to both source builds and the Homebrew dependencies.
+The [Mac frontend archiver](arduino/scripts/archive-macos-frontend.py) verifies
+the package manifest and records the archive digest for each candidate.
+This does not establish Developer ID signing, notarization, Intel Mac or
+lowest-supported-OS execution.
+
+Use Python 3.11+ and the maintained archiver after native verification:
+
+```sh
+python3 arduino/scripts/archive-macos-frontend.py \
+  --package "$PWD/.build/macos-package" --manifest-sha256 EXPECTED_SHA256 \
+  --output "$PWD/.build/stcxx-frontend.tar.bz2"
+```
+
+The archiver requires the pinned complete manifest and passing ARM64 package
+provenance. It rejects changed, missing or added files, symlinks and an existing
+output; it checks the resulting archive against its inputs. `--output -` writes
+only archive bytes to stdout and the successful JSON result to stderr, allowing
+transfer without another remote disk copy. A receiver must require exit code 0
+and verify the reported SHA-256 before accepting the stream. On the Mac, this
+entry point passed six tests and reproduced the same archive as both source
+builds. Linux also passed all six; Windows passed five with the symlink test
+skipped because symlink privileges were not assumed.

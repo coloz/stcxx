@@ -512,7 +512,7 @@ def main():
             if "-DMCS251_SKIP_BSEARCH" not in skipped:
                 required_symbols.append("_bsearch")
             if not args.runtime_cflag:
-                required_symbols.append("__gptrget")
+                required_symbols.extend(("__gptrget", "__gptrput"))
             for symbol in required_symbols:
                 if symbol not in runtime_map:
                     raise SystemExit(

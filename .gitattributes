@@ -1,6 +1,8 @@
 support/regression/tests/bitfields-nibbles.c.in whitespace=cr-at-eol
 
 *.sh text eol=lf
+/arduino/wrappers/sdcc text eol=lf
+/arduino/wrappers/sdcpp text eol=lf
 *.py text eol=lf
 *.patch text eol=lf whitespace=-trailing-space,-space-before-tab
 *.json text eol=lf

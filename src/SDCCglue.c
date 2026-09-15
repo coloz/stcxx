@@ -1750,6 +1750,15 @@ printIvalPtr (symbol *sym, sym_link *type, initList *ilist, struct dbuf_s *oBuf)
           break;
         case 3:
           dbuf_printf (oBuf, "; generic printIvalPtr\n");
+          if (TARGET_IS_MCS251)
+            {
+              /* Flat 24-bit addresses have no separate MCS-51 space tag.
+                 Keep literal initializers in the same big-endian order as
+                 relocated addresses and runtime pointer stores. */
+              dbuf_printf (oBuf, "\t.byte %s,%s,%s\n",
+                           aopLiteral (val, 2), aopLiteral (val, 1), aopLiteral (val, 0));
+              break;
+            }
           if (port->little_endian)
             dbuf_printf (oBuf, "\t.byte %s,%s", aopLiteral (val, 0), aopLiteral (val, 1));
           else

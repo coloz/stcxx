@@ -8,10 +8,19 @@ clang_patch="${repo_root}/arduino/patches/clang-20.1.8-stcsdcc-ir-only.patch"
 cbe_root="${repo_root}/toolchain/llvm-cbe"
 cbe_patch="${repo_root}/arduino/patches/llvm-cbe-83f1bea-stc-sdcc.patch"
 
-expected_llvm_commit=87f0227cb60147a26a1eeb4fb06e3b505e9c7261
-expected_patch_sha=f8fda423712d808dd087d4e789b1e824911cde62d738078bf9325a898d8476c0
-expected_cbe_commit=83f1bea66c7415c701925470a2f7596b37153197
-expected_cbe_patch_sha=0a332f0000aa9d335eb4c0b67bbd40b3020d9acf586c4279b5e8a0ecd2c3025f
+identity=$(python3 - "${repo_root}/arduino/toolchain-lock.json" <<'PY'
+import json, re, sys
+with open(sys.argv[1], encoding='utf-8') as source:
+    lock = json.load(source)
+values = [lock['clang']['commit'], lock['clang']['patch_sha256'],
+          lock['llvm_cbe']['commit'], lock['llvm_cbe']['patch_sha256']]
+for value, width in zip(values, (40, 64, 40, 64)):
+    if not isinstance(value, str) or not re.fullmatch('[0-9a-f]{%d}' % width, value):
+        raise SystemExit('Invalid source identity in toolchain-lock.json')
+print(' '.join(values))
+PY
+)
+read -r expected_llvm_commit expected_patch_sha expected_cbe_commit expected_cbe_patch_sha <<< "${identity}"
 
 # Windows checkouts may materialize the patched files as CRLF.  Canonicalize
 # only the files named by the locked patches before applying them so ordinary

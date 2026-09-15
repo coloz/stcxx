@@ -29,6 +29,12 @@
 #include <stdlib.h>
 #include <stddef.h>
 
+#if defined(__SDCC_mcs251)
+/* Initialization and its state have a separate archive member, so a startup
+   heap snapshot need not pull in the allocation algorithm. */
+#include "mcs251/heap.h"
+#else
+
 #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400)
 #define HEAPSPACE __xdata
 #elif defined(__SDCC_pdk13) || defined(__SDCC_pdk14) || defined(__SDCC_pdk15)
@@ -82,6 +88,8 @@ void __sdcc_heap_init(void)
 	__sdcc_heap_initialized = 1;
 #endif
 }
+
+#endif /* MCS251 initialization/state are provided by _heap_init.c. */
 
 #if defined(__SDCC_mcs51) || defined(__SDCC_mcs251) || defined(__SDCC_ds390) || defined(__SDCC_ds400)
 void HEAPSPACE *malloc(size_t size)

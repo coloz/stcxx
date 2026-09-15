@@ -701,6 +701,25 @@ _mullong (long a, long b)
 
         return t.l;
 }
+#elif defined(__SDCC_mcs251) && (defined(__SDCC_STACK_AUTO) || defined(__SDCC_MODEL_LARGE))
+/* The native unsigned word multiply produces all 32 product bits.  For
+   a = a_hi*2^16 + a_lo and b = b_hi*2^16 + b_lo, a_hi*b_hi vanishes
+   modulo 2^32.  Keep the remaining arithmetic unsigned, including the
+   shift, so signed operands have the same low product bits without C
+   signed overflow.  The small, non-stack-auto byte implementation below
+   is already smaller; retain it for that memory model. */
+long
+_mullong (long a, long b) __SDCC_NONBANKED
+{
+  unsigned short a_lo = (unsigned short)a;
+  unsigned short b_lo = (unsigned short)b;
+  unsigned short a_hi = (unsigned short)((unsigned long)a >> 16);
+  unsigned short b_hi = (unsigned short)((unsigned long)b >> 16);
+  unsigned long low = (unsigned long)a_lo * b_lo;
+  unsigned long cross = (unsigned long)a_hi * b_lo;
+  cross += (unsigned long)b_hi * a_lo;
+  return low + (cross << 16);
+}
 #elif defined(__SDCC_z80) || defined(__SDCC_sm83) || defined(__SDCC_r2ka) || defined(__SDCC_r3k) || defined(__SDCC_r3ka) || defined(__SDCC_r4k) || defined(__SDCC_r5k) || defined(__SDCC_r6k) || defined(__SDCC_r800)
 /* 32x32->32 multiplication to be used
    if 16x16->16 is faster than three 8x8->16.
@@ -763,4 +782,3 @@ _mullong (long a, long b) __SDCC_NONBANKED
 #endif
 
 #endif // _MULLONG_ASM
-

@@ -477,7 +477,13 @@ scan4op (lineNode **pl, const char *pReg, const char *untilOp,
             if (strncmp ("jc",  (*pl)->line, 2) == 0 ||
                 strncmp ("jnc", (*pl)->line, 3) == 0 ||
                 strncmp ("jz",  (*pl)->line, 2) == 0 ||
-                strncmp ("jnz", (*pl)->line, 3) == 0)
+                strncmp ("jnz", (*pl)->line, 3) == 0 ||
+                strncmp ("je",  (*pl)->line, 2) == 0 ||
+                strncmp ("jne", (*pl)->line, 3) == 0 ||
+                strncmp ("jg",  (*pl)->line, 2) == 0 ||
+                strncmp ("jl",  (*pl)->line, 2) == 0 ||
+                strncmp ("jo",  (*pl)->line, 2) == 0 ||
+                strncmp ("jno", (*pl)->line, 3) == 0)
               {
                 isConditionalJump = TRUE;
                 break;

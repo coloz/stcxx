@@ -159,6 +159,10 @@ SOURCES_SDCC = $(COMMON_SDCC) \
   printfl.c \
   bpx.c
 
+ifneq ($(filter mcs251-%,$(PORT)),)
+SOURCES_SDCC += _heap_init.c
+endif
+
 SOURCES = $(SOURCES_FLOAT) $(SOURCES_INT) $(SOURCES_LONG) $(SOURCES_LONGLONG) $(SOURCES_SDCC)
 
 OBJECTS_FLOAT = $(SOURCES_FLOAT:%.c=$(PORT)/%.rel)
@@ -328,6 +332,10 @@ all:
 	$(MAKE) checkconf
 ifneq ($(TARGETS), )
 	$(MAKE) $(TARGETS)
+endif
+
+ifneq ($(filter mcs251-%,$(PORT)),)
+$(PORT)/malloc.rel $(PORT)/_heap_init.rel: $(srcdir)/mcs251/heap.h
 endif
 
 objects:

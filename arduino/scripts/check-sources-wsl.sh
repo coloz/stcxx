@@ -33,16 +33,31 @@ check_normalized_sha() {
 }
 
 check_sha 46156f7ae915487cd31dd94a99934d05706db591bcf2942253e8248b2bf60b25 "${sdcc_patch}"
-check_sha fcb1342a77a412dbb8b0c8c6e8e4df5e1b59744790e63e40c32dd812c9472e12 "${sdcc_combined_patch}"
+check_sha 310d5d53f3cf246ea34b18bad44a868cb7dcd8f55faab317f5505da30747ef2d "${sdcc_combined_patch}"
 check_sha 7b94616120e68ea3ade6b21daf4d1da42d67672e624165e4482722fbf70f30fa "${repo_root}/src/mcs251/Makefile.in"
 check_sha f8fda423712d808dd087d4e789b1e824911cde62d738078bf9325a898d8476c0 "${clang_patch}"
-check_sha 0a332f0000aa9d335eb4c0b67bbd40b3020d9acf586c4279b5e8a0ecd2c3025f "${cbe_patch}"
+check_sha eb9687ce401a3f95c53c424f8af7c1c1a4ceca76be734812148ef18e6948fdf7 "${cbe_patch}"
 check_sha b7a1b7b0af7b9c7596af6bd46e36d11321926eaa66a7a7dc957ab0a1375ee4b0 "${repo_root}/arduino/sources/clang-20.1.8.src.tar.xz"
 check_sha 3319203cfd1172bbac50f06fa68e318af84dcb5d65353310c0586354069d6634 "${repo_root}/arduino/sources/cmake-20.1.8.src.tar.xz"
-check_sha d5786ada45174a4da0fd6c01ac0e2b589533e87fd8090347a136e60459b1ad24 "${repo_root}/arduino/bridge/audit_and_adapt.py"
-check_sha 57f696501cb3254ebc31a6f31f17262d1e4d5fa39be710cce8a04011cdae5e52 "${repo_root}/arduino/bridge/adapt.py"
+check_sha faf8c44e22c09037d29f9332941c6dcf8d8a4236148fd94020ca0264c5665ad5 "${repo_root}/arduino/bridge/audit_and_adapt.py"
+check_sha b068f8b82be25672db548b322d6849a4d5ba51997a60015d878d11682d3a290c "${repo_root}/arduino/bridge/test_native_callback_abi.py"
+check_sha 86d8218ed23b829e4a3be3ba4a9893e78a7d996142c494271893e77e0fb8432d "${repo_root}/arduino/bridge/adapt.py"
+check_sha 2a54f89fc32801a33170375e3704f7ceffbcedd9c5fb7f2d2ba49a87a432adac "${repo_root}/arduino/bridge/align-member-functions.py"
+check_sha 94f07c9821e14e7d57a5043d77c8894e87c8098b2afe1f7d0f5043a57d848f5c "${repo_root}/arduino/bridge/test_mcs51_pointers.py"
+check_sha b41381ad0273cb938f489c0c567607d9c50c41cf2df360655c1dd412280e2b2e "${repo_root}/arduino/bridge/test_member_alignment.py"
+check_sha ce4b11c3a40310b38e4461a5c66204c581f5868c58759597360e6606b5ab2d29 "${repo_root}/arduino/scripts/check-mcs51-pointers.py"
+check_sha 44d9b17a5b92b816a99f24102cae00232b81c8d0c39dd880462083ef67b719dd "${repo_root}/arduino/bridge/fixtures/mcs51-pointers/members.cpp"
+check_sha dc46bd49852002e4a9fc992863d9ba3f14eaea27b3d84a4b7d02249fe1cc0313 "${repo_root}/arduino/bridge/fixtures/mcs51-pointers/native.c"
+check_sha c304295fe89c3f1f7680c8c5797c56bdcb7d5206a595bd9b94366007d4492f6f "${repo_root}/arduino/bridge/fixtures/mcs51-pointers/scalar.cpp"
 check_sha d89d1a430676e178979310c856f7e331a6c18bb2f640d4afa9bef2810ba8aa50 "${repo_root}/arduino/scripts/build-wsl.sh"
-check_sha fc6b85c57169f5c179f2e6f564792ec496655ee03c806db1df84d8b09e240c95 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
+check_sha 8275666403caacf3f801f2ad184fc09f0b01cb86540c14ca156702e66f78a868 "${repo_root}/arduino/scripts/prepare-sources-wsl.sh"
+check_sha d0d88b0d94f1ac74a709c57115c67f89afe65e96e64c9b51efd83ddc40928cd6 "${repo_root}/arduino/wrappers/sdcc"
+check_sha 8bf66efb6f3e56ff21354e8d7a26a7b701a8c3b19466ab2e3951bd2aaac16cf2 "${repo_root}/arduino/wrappers/sdcpp"
+check_sha 973bde145e6c221a335c1996f126faf8bebb4a76c0047308788c3a3891d6edb7 "${repo_root}/arduino/scripts/test_tool_wrappers.py"
+check_sha 6a2647c7f465cf06ebe77c5d578155c8702202c035476006ce26c6f91eb3c1d4 "${repo_root}/src/mcs251/tests/check-mullong-runtime.py"
+check_sha 2f588794315a2a28fef3ca96bf63b2eb4fa48817a8cc32b4443fb14f0d65a373 "${repo_root}/src/mcs251/tests/check-heap-split-runtime.py"
+bash -n "${repo_root}/arduino/wrappers/sdcc"
+bash -n "${repo_root}/arduino/wrappers/sdcpp"
 
 check_normalized_sha 23ade7d95b1a7497f20b1bcfa8823c33ecb72087c1c0aa05dc52020a96aad289 "${repo_root}/toolchain/llvm-project/clang/include/clang/Basic/TargetInfo.h"
 check_normalized_sha 83e17d363bfebaa63486d107b28c6b6cd531dd4fb307a75db6ae9fac9ae09ee3 "${repo_root}/toolchain/llvm-project/clang/lib/AST/ASTContext.cpp"
@@ -58,8 +73,8 @@ check_normalized_sha b556fcf113c24ce29c7f303f0a19fcfebe93b421bf1e87b21ba8bae0cd6
 check_normalized_sha 5da5e393f30104f121ac94bb131a70411b65ff99b7519bacb0ee2126d5e20cd1 "${repo_root}/toolchain/llvm-project/clang/lib/CodeGen/CodeGenTypeCache.h"
 check_normalized_sha 299449910e285455679d28db550a1f058904027b867e814d92869b199da9f3d5 "${repo_root}/toolchain/llvm-project/clang/lib/CodeGen/ItaniumCXXABI.cpp"
 check_normalized_sha 2e53d79ee3d3c23ee3f792c5d21fe0dcdf7e41f1214141a7cca0e927241f4f56 "${repo_root}/toolchain/llvm-project/clang/lib/Driver/ToolChains/Clang.cpp"
-check_normalized_sha 6772e3298c06f78a12bbf0bd6ef41bb087a5af6fd6f9ce35251614a559bb6d4e "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.cpp"
-check_normalized_sha c4bb3e5141ade91bb86067d9df3e2a73810e3a6836aa43f0db8be15f41b4f7b0 "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.h"
+check_normalized_sha 8e9f6ce7faf7e3f9863dac4f0198332b68e95630c072dccc77e2b81463447613 "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.cpp"
+check_normalized_sha 5609713403d6043ef43aa8ea7c5bf99b65abda094a4fb97411d458027cd68f01 "${repo_root}/toolchain/llvm-cbe/lib/Target/CBackend/CBackend.h"
 
 git -C "${repo_root}" cat-file -e "${base_commit}^{commit}"
 git -C "${repo_root}" apply --reverse --check "${sdcc_combined_patch}"
@@ -80,7 +95,7 @@ git -C "${repo_root}" diff --check -- \
   sdas/linksrc/lkmain.c \
   sdas/linksrc/lkmem.c
 patched_blob=$(git -C "${repo_root}" hash-object src/mcs251/gen.c)
-test "${patched_blob}" = c77304895fc568bfcf095d2b4668671e18971ad4 || {
+test "${patched_blob}" = d115d7f822ba71308dcdc11570302d0321d7996a || {
   echo "patched src/mcs251/gen.c blob mismatch: ${patched_blob}" >&2
   exit 3
 }
@@ -119,10 +134,21 @@ while read -r expected path; do
     exit 3
   }
 done <<'BLOBS'
+570a7f5650147f8b101157ee2b4ec02b8a7be274 device/lib/mcs251/heap.h
+0dd3c49a5fc1cc6171d3c8a2033d554d6b89b83b device/lib/_heap_init.c
+26bfcc08a1ab2f956bedaefef9e63d5d5866f40c device/lib/Makefile.in
+789fa5c1822eded79e1cbee66b3cf22cb2a7d5df device/lib/_mullong.c
+b4591f49bf63b7ffaa32a5abf87d0b0637b7bcc3 src/SDCCbtree.cc
+b86ce6bc3ecce7c9bdba2ac12b546e6718e84388 device/lib/_modslonglong.c
+9eb146c49ad5328c7d7bbd135e7408128f56590f device/lib/_divslonglong.c
+c543267976b60eb622e5c67d79c58f42bcce664e device/lib/_modslong.c
+33d1b6018a54bc766ab2185d0a389557b0ef64aa device/lib/_divslong.c
+71ea8604b4d91ed8662b388ec1de6d666b020666 device/lib/_modsint.c
+cba37d57dfb0cee1df8f38af6d0817fa60a0e867 device/lib/_divsint.c
 6b1538adfa806e99be39f90aaeefdc124a7b0bc8 configure
 ffdc0025da10fc9cbab5aced7090c92043820d41 configure.ac
 a5f6f9423e499ea0496525457d4d8f55fab004de device/lib/_heap.c
-fd17c388683fe100ecd5cedd8a4194194d1c1f32 device/lib/malloc.c
+bc6f24625f7ed0959bef5c2fa18b056cbaaf786f device/lib/malloc.c
 12ee44afb7a42c6c1c46cf3936b3ab80215c80df device/lib/mcs251/Makefile.in
 25aa5b6e6856d0ef9b51fe9b2ba217066f244fa8 device/lib/printf_large.c
 a11359ab357008f551701758e32a38e75d18b306 device/lib/realloc.c
@@ -142,18 +168,18 @@ fcb4cabe3a0a41074176e82daed4973b31b6fc0b sdas/linksrc/lkmem.c
 f1370f1cd9b0b47851c3ac0cbc1b433f8ed637bc sdas/linksrc/Makefile.in
 b2b88125933af4fa0d78c7534eec0fa1fbae40e1 sdas/linksrc/sdld.c
 12bf896a08e8aaddb506c5b29924150b991462d6 sdas/linksrc/sdld.h
-c77304895fc568bfcf095d2b4668671e18971ad4 src/mcs251/gen.c
+d115d7f822ba71308dcdc11570302d0321d7996a src/mcs251/gen.c
 8e6b2df1593ca8ffe76d72cfd8290158cf832128 src/mcs251/gen_lower.c.inc
 85b60f9dc09db1fef2644539f32329b5503453ff src/mcs251/main.c
 9807964724593c3af433a04d1cd5e05b1f6108d1 src/mcs251/Makefile.in
-4402f0c81b1d0fe15ab8c235624180ef0cf373fb src/mcs251/peep.c
-232c474568c26ca899b9853a8ec4f35454758e35 src/mcs251/peeph-mcs251.def
+afb0451327cdfb017dbac2d22f580da46cdd0fb7 src/mcs251/peep.c
+1305232acf9156742195c8e1604c8130aec24a06 src/mcs251/peeph-mcs251.def
 6ccb869b0ec48c9041299dc2c88ae69e61a43756 src/SDCCast.c
 e7531b7eb1478450367472c5cc4f45bf25fa9156 src/SDCCglobl.h
-7d1a2473adef5c3f1c767c03206c937c7ba6db9c src/SDCCglue.c
+274de8451a4e35c4574d133104b8e2145a3ff5f5 src/SDCCglue.c
 290086c758d25b6f180350b52207f44a2d44460c src/SDCCicode.c
 b14e27bc67892534c060ec2ea0dea79025ed0cab src/SDCClrange.c
-f6c7c8957680144a2a0fe3613c6c9f68bbef9bb1 src/SDCCmain.c
+b399be423c74460dbed8ed5acd27604c42b032d5 src/SDCCmain.c
 74c37082698baca89bd8b2257b23e196387c124e src/SDCCpeeph.c
 066ef682622a9b7b6a0e14c3bbf2164e04c79508 src/SDCCutil.c
 0aae87361efa24414249d5132f38519080da4387 src/SDCCutil.h
@@ -168,6 +194,13 @@ while read -r expected path; do
     exit 3
   }
 done <<'FIXTURES'
+2c76de88a118322b05e77525877ce7dcc1df64d4 src/mcs251/tests/cppopt-check.py
+e247f24c69caa1d7e5384894f6c92281813dc2b0 src/mcs251/tests/cppopt-assign-overlap.c
+15f81afd4ddbed4156db50bd2f1e20b9feeb8966 src/mcs251/tests/cpp100-pointer-init.c
+bb53e8af4ae4bf60be89eaa18424ad735cab6f45 src/mcs251/tests/cpp100-control-flow.c
+58a89a5adcfaecb5539eb1060f6fc03e2b418adf src/mcs251/tests/cpp100-regressions.c
+c75e8a6d3e8c284862bc1a6c6516134272064596 src/mcs251/tests/cpp100-check.py
+1a743d6d9b7569a2557dcd58458d7494e26c2ed9 src/mcs251/tests/check-signed-divmod-runtime.py
 7739cc256e11ebe2ef0b1c69750bdffd37b17129 sdas/as251/tests/binary-arithmetic-addressing.asm
 6b7d49fbe691fff8951ef4434e865768770bf558 sdas/as251/tests/binary-arithmetic-addressing.expected
 193edc6079e19dfe561ed05ac890558211395091 sdas/as251/tests/binary-bits.asm
@@ -238,14 +271,14 @@ c6283034bd3db9d84710d876fbb2cfe648c13233 src/mcs251/tests/check-codegen.sh
 15444bc1eb60c9d3605ff79ea60afc39ff459058 src/mcs251/tests/check-elf-output.py
 f55c569f0dd77aef3c8101e9b78ba6c523f1ed39 src/mcs251/tests/check-endianness.py
 e1c8caf3a0607306dcdba85458b9e97118ea66d5 src/mcs251/tests/check-gdbstub.py
-222ff4bf1b76b38daa4e8dadc70f53d5046af597 src/mcs251/tests/check-generic-address-roundtrip.py
+5bd722c548025cc72a9ab44012184e49a1f6e0cd src/mcs251/tests/check-generic-address-roundtrip.py
 1205e33a4f0d25b3958d063a9a323706d5e91801 src/mcs251/tests/check-gnu-extensions.py
 917dc912187d479e2d180137c8bb254d26b8f623 src/mcs251/tests/check-language-modes.py
 252f33f92226a69f821813106d36de7728a17073 src/mcs251/tests/check-mcs51-qemu.py
 506529be4cb21595bfa214c2291c65e562eabaf3 src/mcs251/tests/check-native-isa-selection.py
-58f65aad1c3b9f1401779cba9e50cc32fd9bfc9b src/mcs251/tests/check-qemu.py
+79704c6bbeeb61196a7d99db2c4b3f9e39ccba57 src/mcs251/tests/check-qemu.py
 507d69321be9e07d7c34b009536d36f33a8db524 src/mcs251/tests/check-register-allocation.py
-b6c52a77190bb6f74a11e28a1055d76bff3e4e06 src/mcs251/tests/check-stack-word-peephole.py
+eb8c7af4a54119aadbceb188510ddce5889e2ab3 src/mcs251/tests/check-stack-word-peephole.py
 f6d1634ba5561169c6317487413314cef40cf405 src/mcs251/tests/check-static-inline.py
 fdc7f6158086f454d29a0007b35c09371f1d89f8 src/mcs251/tests/check-target-macros.py
 117d19221acd99c12f48553849a4a419be619926 src/mcs251/tests/check-wide-pointer-arithmetic.py
@@ -316,7 +349,7 @@ b7ba6ca694d57c6e9f8f87fd04e300fa2d5ee255 src/mcs251/tests/mixed-width-arithmetic
 b622fdaa1e321b4c8de4d7724c5d1ab51753ec33 src/mcs251/tests/native-extension.c
 739566e9402207581d262b84e0a017ee6d6c1b92 src/mcs251/tests/native-optimization.c
 0c79b7999e332195f9fc4a5684e2c7a6ae867d22 src/mcs251/tests/official/case-support.h
-f6c02d52184ee709f7d8adf07ff1a451d26c6b65 src/mcs251/tests/official/check-official-examples.py
+3fcf653ba84ef604343d3ee4c562471cc54d3f56 src/mcs251/tests/official/check-official-examples.py
 28f9a69b2594f5eb07f2cfaffd637a65d3ba600b src/mcs251/tests/official/counter01.c
 a69641e5956d594a860fcbf78599d1da367b8fce src/mcs251/tests/official/dsp32.c
 3f2996c7c3e03f2a47dc42ee25c55a8b23cb5405 src/mcs251/tests/official/gpio-interrupt.c
@@ -336,10 +369,10 @@ adc19529f7026397937fd616673a7c1f2efa0fb0 src/mcs251/tests/pointer-difference-run
 8af1ca5a748e61ca291d1d958c37297c6927191e src/mcs251/tests/qemu_trace.py
 1e9ee2a432437e4b081b9d3a4e10a23853e28b97 src/mcs251/tests/register-pressure.c
 f68ad06cee64baa2fc82a40e649927f9e5d87fb0 src/mcs251/tests/rematerialized-address-offsets.c
-05949194d1b65a39a9a3ede5280c9c032304aa65 src/mcs251/tests/runtime-main.c
+269aae28c2748adc177fab1a21eb7310051716b3 src/mcs251/tests/runtime-main.c
 d02054efc625e341e40dba3e0d539f7e5b8f55c1 src/mcs251/tests/setjmp-spx-runtime.c
 97fb8b3710b16d9587c95a5d9aea486f1e8dd6b7 src/mcs251/tests/size-type-runtime.c
-8eb63ea68602f35555074354009bca5e19936b31 src/mcs251/tests/stack-word-peephole.c
+cb8212607d3a189a9e6cd51d46220bfa5ba288eb src/mcs251/tests/stack-word-peephole.c
 4d6be5a53c09cbb6be4a37e3295ec8b5e65a2872 src/mcs251/tests/startup-memory.c
 34c9ee1cd9d3c21f0ebad47e8caba207b57a63d1 src/mcs251/tests/statement-expression-runtime.c
 bef640da970528354736d0b5ddd49aaacf47df61 src/mcs251/tests/static-inline-emission.c
@@ -446,4 +479,5 @@ echo "SDCC_PATCHED_LKMAIN_BLOB=${lkmain_blob}"
 echo "SDCC_PATCHED_LKMEM_BLOB=${lkmem_blob}"
 echo "LLVM_PROJECT_COMMIT=${llvm_commit}"
 echo "LLVM_CBE_COMMIT=${cbe_commit}"
+check_sha 34dc1a1a8ff0908c6dba0932ca08962f04d9135958dfd3869256da4177b003c8 "${repo_root}/arduino/bridge/native-storage.py"
 echo "SOURCE_LOCKS=PASS"

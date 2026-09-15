@@ -27,6 +27,7 @@
 -------------------------------------------------------------------------*/
 
 #include <stdint.h>
+#include <limits.h>
 #include <stdbool.h>
 
 #include <sdcc-lib.h>
@@ -39,14 +40,14 @@ _modslonglong (long long numerator, long long denominator) __SDCC_NONBANKED
   bool denominatorneg = (denominator < 0);
   long long r;
 
-  if (numeratorneg)
+  /* Preserve LLONG_MIN's unsigned magnitude without negating it. */
+  if (numeratorneg && numerator != LLONG_MIN)
     numerator = -numerator;
-  if (denominatorneg)
+  if (denominatorneg && denominator != LLONG_MIN)
     denominator = -denominator;
 
   r = (unsigned long long)numerator % (unsigned long long)denominator;
 
-  return (numeratorneg ? -r : r);
+  return ((numeratorneg && r != LLONG_MIN) ? -r : r);
 }
 #endif
-

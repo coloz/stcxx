@@ -206,9 +206,10 @@ not_negative:
 int
 _divsint (int x, int y) __SDCC_NONBANKED
 {
-  register int r;
+  register unsigned int r;
 
-  r = (unsigned int)(x < 0 ? -x : x) / (unsigned int)(y < 0 ? -y : y);
+  r = (x < 0 ? 0u - (unsigned int)x : (unsigned int)x) /
+      (y < 0 ? 0u - (unsigned int)y : (unsigned int)y);
   if ((x < 0) ^ (y < 0))
     return -r;
   else

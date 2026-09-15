@@ -1,8 +1,11 @@
 #!/bin/sh
 set -eu
 
-bin_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-tool_root=$(CDPATH= cd -- "${bin_dir}/.." && pwd)
+# Match sdcc's canonical root when either the bin directory or command is an
+# alias; GCC_EXEC_PREFIX must identify the actual bundled cc1 directory.
+stcxx_wrapper_path=$(readlink -f -- "$0")
+bin_dir=$(CDPATH= cd -- "$(dirname -- "$stcxx_wrapper_path")" && pwd -P)
+tool_root=$(CDPATH= cd -- "${bin_dir}/.." && pwd -P)
 export PATH="${tool_root}/libexec:${bin_dir}:${PATH}"
 export GCC_EXEC_PREFIX="${tool_root}/libexec/"
 exec "${tool_root}/libexec/sdcpp" "$@"

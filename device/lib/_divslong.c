@@ -258,9 +258,11 @@ not_negative:
 long
 _divslong (long x, long y) __SDCC_NONBANKED
 {
-  long r;
+  unsigned long r;
 
-  r = (unsigned long)(x < 0 ? -x : x) / (unsigned long)(y < 0 ? -y : y);
+  /* The magnitude of LONG_MIN is representable only in unsigned long. */
+  r = (x < 0 ? 0UL - (unsigned long)x : (unsigned long)x) /
+      (y < 0 ? 0UL - (unsigned long)y : (unsigned long)y);
   if ((x < 0) ^ (y < 0))
     return -r;
   else

@@ -636,7 +636,9 @@ replace {
 // The generator ships 16-bit stack operands through the accumulator one
 // byte at a time:  mov a,@spx-0xNNNN; mov r7,a; mov a,@spx-0x(NNNN+1);
 // mov r6,a  (10 bytes) becomes the native word load
-// mov wr6,@spx-0x(NNNN+1)  (4 bytes, 6 bytes saved).  inSequence() proves
+// mov wr6,@spx-0x(NNNN+1); mov a,r6.  Preserve the final byte in A:
+// later sign tests, shifts, or stores can consume it after register tracking
+// has removed a redundant reload.  inSequence() proves
 // the hex offsets are consecutive.  The byte order was verified against
 // QEMU: WRj loads Rj from the lower address and Rj+1 from the higher one,
 // which is exactly what the accumulator pair produced.
@@ -649,6 +651,7 @@ replace {
 	mov	r6,a
 } by {
 	mov	wr6,@spx-%2
+	mov	a,r6
 } if inSequence('1' %1 %2)
 
 replace {
@@ -658,6 +661,7 @@ replace {
 	mov	r4,a
 } by {
 	mov	wr4,@spx-%2
+	mov	a,r4
 } if inSequence('1' %1 %2)
 
 replace {
@@ -667,6 +671,7 @@ replace {
 	mov	r2,a
 } by {
 	mov	wr2,@spx-%2
+	mov	a,r2
 } if inSequence('1' %1 %2)
 
 replace {
@@ -676,9 +681,11 @@ replace {
 	mov	r0,a
 } by {
 	mov	wr0,@spx-%2
+	mov	a,r0
 } if inSequence('1' %1 %2)
 
 // Merge byte-pair hardware-stack stores into native 16-bit WR stores.
+// These also leave the final source byte in A, even if the store is folded.
 replace {
 	mov	a,r7
 	mov	@spx-%1,a
@@ -686,6 +693,7 @@ replace {
 	mov	@spx-%2,a
 } by {
 	mov	@spx-%2,wr6
+	mov	a,r6
 } if inSequence('1' %1 %2)
 
 replace {
@@ -695,6 +703,7 @@ replace {
 	mov	@spx-%2,a
 } by {
 	mov	@spx-%2,wr4
+	mov	a,r4
 } if inSequence('1' %1 %2)
 
 replace {
@@ -704,6 +713,7 @@ replace {
 	mov	@spx-%2,a
 } by {
 	mov	@spx-%2,wr2
+	mov	a,r2
 } if inSequence('1' %1 %2)
 
 replace {
@@ -713,4 +723,5 @@ replace {
 	mov	@spx-%2,a
 } by {
 	mov	@spx-%2,wr0
+	mov	a,r0
 } if inSequence('1' %1 %2)
