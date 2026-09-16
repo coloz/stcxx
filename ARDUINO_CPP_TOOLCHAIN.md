@@ -38,6 +38,19 @@ hardware qualification.
 
 ## Build and package layout
 
+Windows production frontends are built natively with Visual Studio 2022 and
+the official LLVM 20.1.8 MSVC development archive. Use
+`arduino/scripts/build-windows-frontend.py`, then
+`arduino/scripts/package-windows-frontend.py`. The latter checks the pinned
+LLVM and embedded Python archives, PE architecture and DLL dependencies,
+and emits a complete SHA-256 manifest and build provenance. No WSL process
+or Linux executable is used by the Windows Arduino runtime.
+
+Apple Silicon uses the native macOS ARM64 frontend. Both hosts install their
+own native SDCC and frontend packages through the Arduino index. Windows
+ships embedded Python; macOS uses native Bash 4.4+, coreutils and Python 3.
+Host locks and final archive bindings are maintained by `arduino-stc51`.
+
 The current full build scripts run in Linux/WSL and require LLVM 20 development
 files. Use a new absolute build directory:
 

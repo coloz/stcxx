@@ -4,7 +4,7 @@ STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目
 
 C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链接成功只说明工具链完成了对应处理；具体芯片的启动、外设和烧录行为需要分别验证。
 
-当前配套 arduino-stc51 的生产发布工作仅面向 Windows 和 macOS。WSL 工具保留为 Windows C++ 的必要依赖，Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-stc51/README.md)。
+当前配套 arduino-stc51 的发布面向 Windows x64 和 Apple Silicon Mac（macOS 15+）。两端 C/C++ 均使用原生工具；Windows 不再依赖 WSL。Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-stc51/README.md)。
 
 ## 项目分工
 
@@ -69,7 +69,16 @@ MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布�
 
 ## 构建与安装
 
-完整流水线的现有脚本面向 Linux / WSL。Windows 用户应在 WSL 中执行以下 Bash 命令，生成的工具也是 Linux 可执行文件；其他宿主平台需要单独适配完整流水线。
+Windows 原生前端使用 Visual Studio 2022 C++ Build Tools、官方 LLVM 20.1.8 Windows MSVC 开发包和 Python 3 构建。Clang/CBE 源码直接读取本仓库受锁定的目录；无需 WSL。以下在 Windows 源码目录执行，路径按实际安装位置调整：
+
+```powershell
+python arduino/scripts/build-windows-frontend.py --llvm-root D:/stc-tools/llvm-20.1.8 --build-root D:/stc-build/native --vs-root 'C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools' --jobs 4
+python arduino/scripts/package-windows-frontend.py --llvm-root D:/stc-tools/llvm-20.1.8 --build-root D:/stc-build/native --llvm-archive D:/stc-tools/clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz --python-archive D:/stc-tools/python-3.12.10-embed-amd64.zip --output D:/stc-packages/native
+```
+
+打包入口核验官方 LLVM/Python 归档摘要，收集五个原生 PE 工具、嵌入式 Python、头文件、许可证、构建记录和完整文件清单，并检查 DLL 依赖。Arduino 平台负责原生 SDCC 的独立依赖及宿主锁文件绑定。macOS 前端继续使用原生 ARM64 包。
+
+以下 Bash 构建流程保留供 Linux 源码维护使用，不是 Windows 安装或编译 Arduino 工程的步骤。
 
 需要 C/C++ 宿主编译器、GNU Make、Bison、Flex、Boost 开发头文件，以及 Git、Python 3、CMake、Ninja、patch、tar、xz、`sha256sum`。Ubuntu / Debian 的基础工具可这样准备：
 
@@ -87,10 +96,10 @@ llvm-config-20 --version
 llvm-config-20 --cmakedir
 ```
 
-以下以 `D:\Git\stc51\stcxx` 对应的 WSL 路径为例：
+Linux 维护环境示例：
 
 ```sh
-cd /mnt/d/Git/stc51/stcxx
+cd /path/to/stcxx
 export STC_TOOLCHAIN_BUILD_JOBS=4
 bash arduino/scripts/build-wsl.sh /var/tmp/stcxx-build all
 ```
@@ -193,17 +202,15 @@ python3 arduino/scripts/verify-linux-frontend.py \
 
 板卡菜单、运行时、启动代码和 `.cpp` 编译入口位于 [arduino-stc51](../arduino-stc51/README.md)。当前配方使用 `gnu++11` 和实验性的 `cppcore=enabled` 配置，当前所有板项固定使用 MCS251 ABI；全部型号提供 12 MHz，部分型号另有已列出的时钟配置。
 
-Arduino WSL 适配层支持以下环境变量。路径值使用 WSL 路径，并确保变量在启动流水线的环境中可见：
+Arduino 原生适配层按开发板管理器安装目录定位工具。源码调试支持以下环境变量，路径使用当前系统的本机路径：
 
 | 变量 | 用途 |
 | --- | --- |
-| `STCXX_TOOLCHAIN_ROOT` | STCXX 根目录；SDCC 默认从其 `out/bin/sdcc` 读取 |
-| `STCXX_SDCC` | 显式指定 SDCC 包装入口 |
-| `STCXX_CLANG`、`STCXX_LLVM_CBE` | 指定带 STC 补丁的 Clang、LLVM-CBE |
-| `STCXX_LLVM_LINK`、`STCXX_OPT`、`STCXX_LLVM_DIS` | 指定 LLVM 20 配套命令 |
-| `STCXX_WSL_DISTRO` | Windows 包装层使用的 WSL 发行版，默认 `Ubuntu` |
+| `STCXX_CPP_TOOLS_ROOT` | 已解压且与宿主锁一致的原生前端包根目录 |
+| `STCXX_SDCC` | 与宿主锁一致的本机 SDCC 可执行文件 |
+| `STCXX_BASH`、`STCXX_COREUTILS_BIN` | macOS 的 Bash 和 GNU coreutils 路径 |
 
-Arduino 侧另有 `tools/cpp-cli/toolchain-lock.json`，会校验工具、共享库和适配脚本的哈希。自行重建后，路径和产物身份均需与该配置核对；只修改路径不会改变哈希要求。
+Arduino 侧分别使用 `tools/cpp-cli/toolchain-lock.windows-x86_64.json` 和 `toolchain-lock.macos-arm64.json` 校验工具、运行库和适配脚本摘要。Windows 包内 Python 及引导文件在执行前校验。自行重建后，路径和产物身份均需与宿主锁核对；只修改路径不会改变摘要要求。
 
 独立适配器可与实际 Arduino 构建的生成 C 进行逐字节比较。在生成这些产物的 Linux/WSL 环境运行以下命令；`--bridge` 可重复指定，每个目录应包含成功构建的 `manifest.json`、IR、原始 C 和存储清单：
 
