@@ -618,11 +618,11 @@
     "native_callback_regression_sha256": "b068f8b82be25672db548b322d6849a4d5ba51997a60015d878d11682d3a290c",
     "candidate_note": "Reconstructed dual-profile CLI candidate after mistaken MCS251-only synchronization; previous uncommitted text digest was not recovered. Fresh comprehensive qualification required.",
     "member_alignment": "arduino/bridge/align-member-functions.py",
-    "member_alignment_sha256": "2a54f89fc32801a33170375e3704f7ceffbcedd9c5fb7f2d2ba49a87a432adac",
+    "member_alignment_sha256": "4e3b85584a78c34abe369dfceeeee97ddaf9d6b18ab5e24247f469c9860f72fb",
     "mcs51_pointer_regression": "arduino/bridge/test_mcs51_pointers.py",
     "mcs51_pointer_regression_sha256": "94f07c9821e14e7d57a5043d77c8894e87c8098b2afe1f7d0f5043a57d848f5c",
     "member_alignment_regression": "arduino/bridge/test_member_alignment.py",
-    "member_alignment_regression_sha256": "b41381ad0273cb938f489c0c567607d9c50c41cf2df360655c1dd412280e2b2e",
+    "member_alignment_regression_sha256": "ba879bfd0996ec90c04ec2f4c930a1c55ac22588700c5d45b08a3e388df5927d",
     "mcs51_pointer_target_regression": "arduino/scripts/check-mcs51-pointers.py",
     "mcs51_pointer_target_regression_sha256": "ce4b11c3a40310b38e4461a5c66204c581f5868c58759597360e6606b5ab2d29",
     "mcs51_pointer_fixtures_sha256": {
