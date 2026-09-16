@@ -179,10 +179,12 @@ e7531b7eb1478450367472c5cc4f45bf25fa9156 src/SDCCglobl.h
 274de8451a4e35c4574d133104b8e2145a3ff5f5 src/SDCCglue.c
 290086c758d25b6f180350b52207f44a2d44460c src/SDCCicode.c
 b14e27bc67892534c060ec2ea0dea79025ed0cab src/SDCClrange.c
-b399be423c74460dbed8ed5acd27604c42b032d5 src/SDCCmain.c
+bd58243455a2e4f02f073c4215d80d46fb89f5e1 src/SDCCmain.c
 74c37082698baca89bd8b2257b23e196387c124e src/SDCCpeeph.c
 066ef682622a9b7b6a0e14c3bbf2164e04c79508 src/SDCCutil.c
 0aae87361efa24414249d5132f38519080da4387 src/SDCCutil.h
+336eb2928b0f5e3a7d3272a4a29bc811bec2d06a support/cpp/gcc/c-family/c-ppoutput.cc
+6f5e270acb1919e1f44b8ccac911e1dc1a7c2f13 support/cpp/libcpp/init.cc
 BLOBS
 
 # The restored baseline fixtures are also inputs to the audit, even when they
@@ -280,7 +282,7 @@ e1c8caf3a0607306dcdba85458b9e97118ea66d5 src/mcs251/tests/check-gdbstub.py
 507d69321be9e07d7c34b009536d36f33a8db524 src/mcs251/tests/check-register-allocation.py
 eb8c7af4a54119aadbceb188510ddce5889e2ab3 src/mcs251/tests/check-stack-word-peephole.py
 f6d1634ba5561169c6317487413314cef40cf405 src/mcs251/tests/check-static-inline.py
-fdc7f6158086f454d29a0007b35c09371f1d89f8 src/mcs251/tests/check-target-macros.py
+43433d990ff7be13583b647b1cd5b317202a80ad src/mcs251/tests/check-target-macros.py
 117d19221acd99c12f48553849a4a419be619926 src/mcs251/tests/check-wide-pointer-arithmetic.py
 c4824fdce1d09074dfb235c028e5942599fa29e7 src/mcs251/tests/check-wide-shift-jump-table.py
 302ab858c7fc5c8887578933238a26c4e6c24d1e src/mcs251/tests/compatible-block-extern-struct.c

@@ -38,7 +38,7 @@
       "prepare_script": "arduino/scripts/prepare-sources-wsl.sh",
       "prepare_script_sha256": "f5ef46e92a1118224cacfe08d69b4a0e4a95d97ed5bc2677361b5c1cebcab710",
       "source_check_script": "arduino/scripts/check-sources-wsl.sh",
-      "source_check_script_sha256": "0a00e2ec9621fa7fcce46bae360bcbf64beafc850bff5b5e2154561858a29c11"
+      "source_check_script_sha256": "7646ce24590712137e0c851548093be674404a45006e3134b07ddd36a2f0e28c"
     }
   },
   "llvm_cbe": {

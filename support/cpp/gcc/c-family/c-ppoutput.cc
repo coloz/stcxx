@@ -164,7 +164,9 @@ init_pp_output (FILE *out_stream)
     }
 
   cb->has_attribute = c_common_has_attribute;
-  cb->has_builtin = c_common_has_builtin;
+  /* SDCC uses -undef and supplies its own target/frontend builtin query.
+     Do not install the host query before those command-line definitions. */
+  cb->has_builtin = flag_undef ? NULL : c_common_has_builtin;
   cb->get_source_date_epoch = cb_get_source_date_epoch;
   cb->remap_filename = remap_macro_filename;
 

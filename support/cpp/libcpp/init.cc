@@ -515,10 +515,13 @@ cpp_init_special_builtins (cpp_reader *pfile)
   for (b = builtin_array; b < builtin_array + n; b++)
     {
       if ((b->value == BT_HAS_ATTRIBUTE
-	   || b->value == BT_HAS_STD_ATTRIBUTE
-	   || b->value == BT_HAS_BUILTIN)
+	   || b->value == BT_HAS_STD_ATTRIBUTE)
 	  && (CPP_OPTION (pfile, lang) == CLK_ASM
 	      || pfile->cb.has_attribute == NULL))
+	continue;
+      if (b->value == BT_HAS_BUILTIN
+	  && (CPP_OPTION (pfile, lang) == CLK_ASM
+	      || pfile->cb.has_builtin == NULL))
 	continue;
       cpp_hashnode *hp = cpp_lookup (pfile, b->name, b->len);
       hp->type = NT_BUILTIN_MACRO;

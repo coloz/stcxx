@@ -207,9 +207,9 @@ def read_macros(sdcc, device_include, source, port, mode, options=()):
             f"{port} --std={mode_name} could not dump macros:\n"
             f"{result.stdout}{result.stderr}"
         )
-    if "-Wbuiltin-macro-redefined" in result.stderr:
+    if result.stderr.strip():
         raise RuntimeError(
-            f"{port} --std={mode_name} exposed host-macro reset warnings:\n"
+            f"{port} --std={mode_name} exposed preprocessor diagnostics:\n"
             f"{result.stderr}"
         )
 
@@ -286,6 +286,46 @@ def check_char_signedness(sdcc, device_include, source, port):
     if "__CHAR_UNSIGNED__" in signed_macros:
         raise RuntimeError(f"{port} advertises unsigned char in signed-char mode")
     print(f"PASS: {port} char signedness macros follow the selected ABI")
+
+
+def check_preprocessor_diagnostics(sdcc, device_include, source, port):
+    builtin_source = Path(__file__).with_name("gnu-has-builtin.c")
+    for mode in ("sdcc11", "c11", "gnu17"):
+        command = [
+            str(sdcc), f"-m{port}", f"--std={mode}",
+            f"-I{device_include}", "--syntax-only", str(builtin_source),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True,
+                                errors="replace", check=False)
+        if result.returncode or result.stderr.strip():
+            raise RuntimeError(
+                f"{port} --std={mode} builtin query produced diagnostics:\n"
+                f"{result.stdout}{result.stderr}"
+            )
+
+    # Real source diagnostics must remain on stderr; a warning filter or
+    # blanket suppression would make the quiet-macro checks pass incorrectly.
+    cases = (
+        ("#warning SDCC_DIAGNOSTIC_WARNING\n", "SDCC_DIAGNOSTIC_WARNING", False),
+        ("#error SDCC_DIAGNOSTIC_ERROR\n", "SDCC_DIAGNOSTIC_ERROR", True),
+        ("#define USER_MACRO 1\n#define USER_MACRO 2\n", '"USER_MACRO" redefined', False),
+        ("#define __has_builtin(x) 0\n", '"__has_builtin" redefined', False),
+        ("#define __STDC_HOSTED__ 1\n", '"__STDC_HOSTED__" redefined', False),
+    )
+    for contents, diagnostic, fails in cases:
+        source.write_text(contents, encoding="utf-8")
+        result = subprocess.run(
+            [str(sdcc), f"-m{port}", "-E", str(source)],
+            capture_output=True, text=True, errors="replace", check=False,
+        )
+        if bool(result.returncode) != fails or diagnostic not in result.stderr:
+            raise RuntimeError(
+                f"{port} lost source diagnostic {diagnostic!r}:\n"
+                f"{result.stdout}{result.stderr}"
+            )
+        if "<command-line>: warning:" in result.stderr:
+            raise RuntimeError(f"{port} leaked driver diagnostics:\n{result.stderr}")
+    print(f"PASS: {port} builtin queries are quiet; source warnings/errors remain")
 
 
 def check_macro_semantics(sdcc, device_include, source, port):
@@ -415,6 +455,9 @@ def main():
                     sdcc, device_include, source, port, mode
                 )
             check_char_signedness(sdcc, device_include, source, port)
+            check_preprocessor_diagnostics(
+                sdcc, device_include, semantic_source, port
+            )
             check_macro_semantics(
                 sdcc, device_include, semantic_source, port
             )

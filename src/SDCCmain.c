@@ -2456,6 +2456,8 @@ preProcess (char **envp)
       /* sdcpp is a host program. Do not expose its host ABI as target
          predefined macros. */
       addSet (&preArgvSet, Safe_strdup ("-undef"));
+      /* Let sdcpp define __STDC_HOSTED__ for the target environment. */
+      addSet (&preArgvSet, Safe_strdup ("-ffreestanding"));
       addSet (&preArgvSet,
               Safe_strdup ("-Wno-builtin-macro-redefined"));
       addSet (&preArgvSet,
@@ -2779,7 +2781,6 @@ preProcess (char **envp)
       addSet (&preArgvSet, Safe_strdup ("-D__STDC_ISO_10646__=201409L")); // wchar_t is UTF-32
 
       /* Target data model. Never inherit these values from the host cpp. */
-      addSet (&preArgvSet, Safe_strdup ("-D__STDC_HOSTED__=0"));
       addPreprocessorUIntDefine ("__CHAR_BIT__", port->s.char_size * 8);
       addPreprocessorUIntDefine ("__SIZEOF_CHAR__", port->s.char_size);
       addPreprocessorUIntDefine ("__SIZEOF_SHORT__", port->s.short_size);
