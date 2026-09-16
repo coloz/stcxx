@@ -75,6 +75,24 @@ class FinalMethodAddress(unittest.TestCase):
             self.assertEqual(retry['realignment']['reason'], 'uniform-odd-final-addresses')
             self.assertEqual(self.verify(root, 'mcs51', '  000102  12 _method:\n')['outcome'], 'pass')
 
+    def test_native_windows_crlf_listing(self):
+        for newline in ('\n', '\r\n'):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.fixture(root, 'mcs251')
+                result = self.verify(root, 'mcs251', '  FE0100  12 _method:' + newline)
+                self.assertEqual(result['outcome'], 'pass')
+                self.assertEqual(result['relocation_verification']['records'][0]['address'], 0xFE0100)
+
+    def test_native_windows_crlf_keeps_duplicate_and_parity_checks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.fixture(root, 'mcs251')
+            with self.assertRaisesRegex(RuntimeError, 'occurs 2 times'):
+                self.verify(root, 'mcs251', '  FE0100  12 _method:\r\n  FE0102  14 _method:\r\n')
+            result = self.verify(root, 'mcs251', '  FE0101  12 _method:\r\n')
+            self.assertEqual(result['outcome'], 'realign_required')
+
     def test_reject_duplicate_or_missing_final_label(self):
         for listing in ('', '  000100  12 _method:\n  000102  14 _method:\n'):
             with self.subTest(listing=listing), tempfile.TemporaryDirectory() as directory:

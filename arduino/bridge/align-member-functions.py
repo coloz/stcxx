@@ -923,7 +923,7 @@ def verify_relocated_listing(
         label = alignment_record["assembly_label"]
         pattern = re.compile(
             rf"^[ \t]*([0-9A-Fa-f]{{{address_digits},8}})[ \t]+[0-9]+[ \t]+"
-            rf"{re.escape(label)}:[ \t]*$",
+            rf"{re.escape(label)}:[ \t]*\r?$",
             re.MULTILINE,
         )
         matches = pattern.findall(listing)
