@@ -25,6 +25,8 @@ stc51/
 
 底层可执行工具仍叫 `clang`、`llvm-cbe`、`sdcc`、`sdas8051`、`sdas251`、`sdld` 和 `sdldmcs251`。`stcxx` 是工具链项目名称。
 
+配套 Arduino 平台 0.0.5 起，对外统一发布 `stcxx-toolchain`，首个工具版本为 `0.1.0`。包内 `frontend/` 和 `sdcc/` 保留各自完整的二进制、依赖、许可证及清单。组件构建入口继续独立维护；`arduino/scripts/package-toolchain.py` 将两个已锁定归档合并为一个可安装包，支持在任意宿主上打包 Windows x64 和 macOS ARM64。完整步骤见 [统一工具链打包说明](../arduino-stc51/scripts/TOOLCHAIN-PACKAGING.md)。
+
 ## 编译流程与目标
 
 ```text
@@ -206,6 +208,7 @@ Arduino 原生适配层按开发板管理器安装目录定位工具。源码调
 
 | 变量 | 用途 |
 | --- | --- |
+| `STCXX_TOOLS_ROOT` | 已解压的统一 `stcxx-toolchain` 包根目录，包含 `frontend/` 和 `sdcc/` |
 | `STCXX_CPP_TOOLS_ROOT` | 已解压且与宿主锁一致的原生前端包根目录 |
 | `STCXX_SDCC` | 与宿主锁一致的本机 SDCC 可执行文件 |
 | `STCXX_BASH`、`STCXX_COREUTILS_BIN` | macOS 的 Bash 和 GNU coreutils 路径 |
