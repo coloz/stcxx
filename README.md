@@ -4,14 +4,14 @@ STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目
 
 C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链接成功只说明工具链完成了对应处理；具体芯片的启动、外设和烧录行为需要分别验证。
 
-当前配套 arduino-stc51 的发布面向 Windows x64 和 Apple Silicon Mac（macOS 15+）。两端 C/C++ 均使用原生工具；Windows 不再依赖 WSL。Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-stc51/README.md)。
+当前配套 arduino-mcs251 的发布面向 Windows x64 和 Apple Silicon Mac（macOS 15+）。两端 C/C++ 均使用原生工具；Windows 不再依赖 WSL。Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-mcs251/README.md)。
 
 ## 项目分工
 
 | 项目 | 负责内容 |
 | --- | --- |
 | **stcxx** | C/C++ 前端、目标 ABI、SDCC 编译器、汇编器、链接器和运行库 |
-| [arduino-stc51](../arduino-stc51/README.md) | Arduino Core、芯片 variants、引脚/外设 API、板卡配置及固件编译配方 |
+| [arduino-mcs251](../arduino-mcs251/README.md) | Arduino Core、芯片 variants、引脚/外设 API、板卡配置及固件编译配方 |
 | [stc-cli](../stc-cli/README.md) | 固件地址/容量校验、串口 ISP、擦除与写入 |
 
 建议三个项目并列放置：
@@ -19,13 +19,13 @@ C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链�
 ```text
 stc51/
 ├── stcxx/
-├── arduino-stc51/
+├── arduino-mcs251/
 └── stc-cli/
 ```
 
 底层可执行工具仍叫 `clang`、`llvm-cbe`、`sdcc`、`sdas8051`、`sdas251`、`sdld` 和 `sdldmcs251`。`stcxx` 是工具链项目名称。
 
-配套 Arduino 平台 0.0.5 起，对外统一发布 `stcxx-toolchain`，首个工具版本为 `0.1.0`。包内 `frontend/` 和 `sdcc/` 保留各自完整的二进制、依赖、许可证及清单。组件构建入口继续独立维护；`arduino/scripts/package-toolchain.py` 将两个已锁定归档合并为一个可安装包，支持在任意宿主上打包 Windows x64 和 macOS ARM64。完整步骤见 [统一工具链打包说明](../arduino-stc51/scripts/TOOLCHAIN-PACKAGING.md)。
+配套 Arduino 平台 0.0.5 起，对外统一发布 `stcxx-toolchain`，首个工具版本为 `0.1.0`。包内 `frontend/` 和 `sdcc/` 保留各自完整的二进制、依赖、许可证及清单。组件构建入口继续独立维护；`arduino/scripts/package-toolchain.py` 将两个已锁定归档合并为一个可安装包，支持在任意宿主上打包 Windows x64 和 macOS ARM64。完整步骤见 [统一工具链打包说明](../arduino-mcs251/scripts/TOOLCHAIN-PACKAGING.md)。
 
 ## 编译流程与目标
 
@@ -41,9 +41,9 @@ C++ 流水线核对 triple、数据布局和运行时 ABI，再将 LLVM-CBE 输�
 | MCS-51 | `-mmcs51` | `msp430-stc51-none-eabi` | 小端；16 位 `int` / `size_t`，24 位通用数据指针，16 位函数指针 |
 | MCS-251 | `-mmcs251` | `msp430-stc-none-eabi` | 大端；16 位 `int`、32 位 `size_t`，24 位数据/函数指针 |
 
-MCS-51 适用于 STC8、Ai8 等 8051 执行模式，MCS-251 适用于相应 STC32 执行模式。AI8051U 等双模式芯片必须让编译配置、链接地址和执行模式保持一致。具体 Flash 起点、容量和内存布局由 `arduino-stc51/variants/*/variant.json` 与板卡配置决定。
+MCS-51 适用于 STC8、Ai8 等 8051 执行模式，MCS-251 适用于相应 STC32 执行模式。AI8051U 等双模式芯片必须让编译配置、链接地址和执行模式保持一致。具体 Flash 起点、容量和内存布局由 `arduino-mcs251/variants/*/variant.json` 与板卡配置决定。
 
-2026-09-13 起，配套 Arduino 平台仅保留 10 个 MCS251 型号及其固定执行目标，型号清单见 [devices.json](../arduino-stc51/tools/variants/devices.json)。本仓库继续提供通用 MCS-51 / MCS-251 编译后端，`stc-cli` 也独立保留其支持的 STC8、Ai8 和限定 STC16 烧录能力；三个项目的支持范围应分别理解。
+2026-09-13 起，配套 Arduino 平台仅保留 10 个 MCS251 型号及其固定执行目标，型号清单见 [devices.json](../arduino-mcs251/tools/variants/devices.json)。本仓库继续提供通用 MCS-51 / MCS-251 编译后端，`stc-cli` 也独立保留其支持的 STC8、Ai8 和限定 STC16 烧录能力；三个项目的支持范围应分别理解。
 
 MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布局。两个目标的 ABI、运行库和目标文件不能混用。MCS-251 运行库提供 `small`、`small-stack-auto`、`large`、`large-stack-auto` 四组配置。
 
@@ -201,7 +201,7 @@ python3 arduino/scripts/verify-linux-frontend.py \
 
 ### Arduino C++
 
-板卡菜单、运行时、启动代码和 `.cpp` 编译入口位于 [arduino-stc51](../arduino-stc51/README.md)。当前配方使用 `gnu++11` 和实验性的 `cppcore=enabled` 配置，当前所有板项固定使用 MCS251 ABI；全部型号提供 12 MHz，部分型号另有已列出的时钟配置。
+板卡菜单、运行时、启动代码和 `.cpp` 编译入口位于 [arduino-mcs251](../arduino-mcs251/README.md)。当前配方使用 `gnu++11` 和实验性的 `cppcore=enabled` 配置，当前所有板项固定使用 MCS251 ABI；全部型号提供 12 MHz，部分型号另有已列出的时钟配置。
 
 Arduino 原生适配层按开发板管理器安装目录定位工具。源码调试支持以下环境变量，路径使用当前系统的本机路径：
 

@@ -192,7 +192,7 @@
           "binary_archive_sha256": "a2c810411ccc7baae396287fab91c32d78060d2ebd871e0e3646692c7f1a9802",
           "binary_build_source_lock_sha256": "1c3270e0b7ade920e5090a99b3a41efc6b5042f27f8b6610aa11df45a25f9b94",
           "source_archive_sha256": "a81247e865344efc542a8d9323660ee6020afe76e81728440d687874aa5dadc4",
-          "durable_evidence_path": "../arduino-stc51/docs/production-gptr-inline-r7-20260914.json",
+          "durable_evidence_path": "../arduino-mcs251/docs/production-gptr-inline-r7-20260914.json",
           "durable_evidence_sha256": "af76e48c022ff935ccb9a0befbca2ee272ea821d2212da965a807e2afc23e4c9",
           "runtime_archive_sha256": {
             "huge/libfloat.lib": "b42d84f185530fd66417dc155dbd3d809002d373e8917c362c3594c047fc076b",

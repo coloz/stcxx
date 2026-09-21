@@ -49,7 +49,7 @@ or Linux executable is used by the Windows Arduino runtime.
 Apple Silicon uses the native macOS ARM64 frontend. Both hosts install their
 own native SDCC and frontend packages through the Arduino index. Windows
 ships embedded Python; macOS uses native Bash 4.4+, coreutils and Python 3.
-Host locks and final archive bindings are maintained by `arduino-stc51`.
+Host locks and final archive bindings are maintained by `arduino-mcs251`.
 
 The current full build scripts run in Linux/WSL and require LLVM 20 development
 files. Use a new absolute build directory:
@@ -122,7 +122,7 @@ varargs and weak/COMDAT edge cases remain subject to these checks; accepting
 C++ syntax in Clang alone does not establish a working firmware ABI.
 
 Chip-specific Flash addresses, stack/heap limits and startup behavior belong
-to [arduino-stc51](../arduino-stc51/README.md). The existing C++ board profiles
+to [arduino-mcs251](../arduino-mcs251/README.md). The existing C++ board profiles
 are experimental. Firmware validation and UART ISP are supplied separately
 by [stc-cli](../stc-cli/README.md).
 
