@@ -1,0 +1,25 @@
+[package]
+name = "stcxx-driver"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+description = "Standalone STC MCS251 C/C++ toolchain and Arduino compiler driver"
+
+[[bin]]
+name = "stcxx"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+sha2 = "0.10"
+regex = "1"
+fancy-regex = "0.16"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+walkdir = "2"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

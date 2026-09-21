@@ -1,10 +1,41 @@
 # STCXX（STC++）
 
-STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目录名为 `stcxx`。它将修改后的 Clang、LLVM-CBE、Arduino 适配层与 SDCC 的 MCS-51 / MCS-251 后端组合，用于生成单片机固件。
+STCXX 是面向 STC 8051 / 251 微控制器的 C/C++ 工具链源码项目，目录名为 `stcxx`。它将修改后的 Clang、LLVM-CBE、共享原生驱动与 SDCC 的 MCS-51 / MCS-251 后端组合，用于生成单片机固件。当前独立 SDK 和 Arduino 平台提供 10 个 MCS251 型号的完整配置；SDCC 组件仍保留 MCS-51 后端。
 
 C++ 支持处于实验阶段，采用 freestanding 运行环境。编译、链接成功只说明工具链完成了对应处理；具体芯片的启动、外设和烧录行为需要分别验证。
 
 当前配套 arduino-mcs251 的发布面向 Windows x64 和 Apple Silicon Mac（macOS 15+）。两端 C/C++ 均使用原生工具；Windows 不再依赖 WSL。Linux 独立宿主不纳入本次适配和验收；详见 [Arduino 平台说明](../arduino-mcs251/README.md)。
+
+## 独立、统一的 C/C++ 入口
+
+`compiler/` 维护共享 Rust 驱动，`sdk/` 维护独立运行库、宿主锁和 10 个 MCS251 芯片配置。
+独立程序使用 `int main(void)`，不需要 Arduino Core、IDE 或 `setup/loop`。Arduino 的构建入口也引用同一个驱动实现。
+
+构建驱动需要 Rust 和 Node；运行已打包的工具链不需要它们或 Python：
+
+```powershell
+node scripts/build-driver.mjs
+# 指向已解压、与 sdk/locks 一致的原生组件包；允许复用现有 0.2.0 组件。
+$env:STCXX_TOOLS_ROOT = 'D:/tools/stcxx-toolchain'
+.\compiler\target\release\stcxx.exe --list-chips
+.\compiler\target\release\stcxx.exe --chip stc32g8k64 examples/standalone/main.cpp examples/standalone/native.c -o build/mixed.hex
+.\compiler\target\release\stcxx.exe --chip stc32g8k64 examples/standalone/main.c -o build/c-only.hex
+```
+
+独立驱动版本为 `0.3.0`。以下命令把当前驱动、SDK、许可证和已锁定的编译组件打成完整工具链；输出必须是新路径：
+
+```powershell
+.\compiler\target\release\stcxx.exe package-toolchain $env:STCXX_TOOLS_ROOT dist/stcxx-toolchain-0.3.0-windows-x86_64.zip
+```
+
+解压后直接使用 `bin/stcxx.exe --chip stc32g8k64 main.cpp -o firmware.hex`。
+macOS 对应原生构建的 `bin/stcxx`。包内相对定位组件和 SDK，不依赖源码目录。
+本地打包不会修改已发布的 Arduino 索引或发布版本。分步编译、混合调用、ISR 声明、控制台接口及限制见 [独立 SDK 使用说明](sdk/README.md)。
+
+```sh
+cargo test --manifest-path compiler/Cargo.toml --locked --offline
+node ../arduino-mcs251/scripts/sync-stcxx-sdk.mjs --check
+```
 
 ## 项目分工
 
@@ -24,6 +55,8 @@ stc51/
 ```
 
 底层可执行工具仍叫 `clang`、`llvm-cbe`、`sdcc`、`sdas8051`、`sdas251`、`sdld` 和 `sdldmcs251`。`stcxx` 是工具链项目名称。
+
+`stcxx` 同时也是统一驱动的命令名。`out/` 仍然是 SDCC 组件构建输出；完整 C/C++ 分发包由上面的 `package-toolchain` 入口生成。
 
 配套 Arduino 平台 0.0.5 起，对外统一发布 `stcxx-toolchain`，首个工具版本为 `0.1.0`。包内 `frontend/` 和 `sdcc/` 保留各自完整的二进制、依赖、许可证及清单。组件构建入口继续独立维护；`arduino/scripts/package-toolchain.py` 将两个已锁定归档合并为一个可安装包，支持在任意宿主上打包 Windows x64 和 macOS ARM64。完整步骤见 [统一工具链打包说明](../arduino-mcs251/scripts/TOOLCHAIN-PACKAGING.md)。
 
@@ -54,6 +87,8 @@ MCS-251 使用专用 `sdldmcs251` 链接模式，支持项目中的扩展栈布�
 | 路径 | 用途 |
 | --- | --- |
 | `src/`、`device/`、`sdas/`、`support/` | SDCC、运行库、汇编/链接与配套工具 |
+| `compiler/` | 独立命令行及 Arduino 共用的原生编译驱动、IR/C 适配与链接审计 |
+| `sdk/` | 独立启动代码、基础 C++ 运行库、芯片配置和宿主工具锁 |
 | `toolchain/llvm-project/`、`toolchain/llvm-cbe/` | 主仓库直接管理的 Clang / CMake 与 LLVM-CBE 源码，已应用 STC 补丁 |
 | `toolchain/source-manifest.json` | 导入源码的完整文件清单、Git 文件模式、SHA-256 和上游版本 |
 | `arduino/patches/` | Clang、LLVM-CBE 和 SDCC 修改补丁 |
@@ -201,7 +236,7 @@ python3 arduino/scripts/verify-linux-frontend.py \
 
 ### Arduino C++
 
-板卡菜单、运行时、启动代码和 `.cpp` 编译入口位于 [arduino-mcs251](../arduino-mcs251/README.md)。当前配方使用 `gnu++11` 和实验性的 `cppcore=enabled` 配置，当前所有板项固定使用 MCS251 ABI；全部型号提供 12 MHz，部分型号另有已列出的时钟配置。
+Arduino 板卡菜单、外围设备 API 和 Arduino 生命周期启动代码位于 [arduino-mcs251](../arduino-mcs251/README.md)。当前所有板项默认启用 `gnu++11`，固定使用 MCS251 ABI；全部型号提供 12 MHz，部分型号另有已列出的时钟配置。其驱动包装程序直接依赖本仓库 `compiler/`，基础运行库通过 `scripts/sync-stcxx-sdk.mjs` 同步到可独立安装的平台包。
 
 Arduino 原生适配层按开发板管理器安装目录定位工具。源码调试支持以下环境变量，路径使用当前系统的本机路径：
 
@@ -210,9 +245,8 @@ Arduino 原生适配层按开发板管理器安装目录定位工具。源码调
 | `STCXX_TOOLS_ROOT` | 已解压的统一 `stcxx-toolchain` 包根目录，包含 `frontend/` 和 `sdcc/` |
 | `STCXX_CPP_TOOLS_ROOT` | 已解压且与宿主锁一致的原生前端包根目录 |
 | `STCXX_SDCC` | 与宿主锁一致的本机 SDCC 可执行文件 |
-| `STCXX_BASH`、`STCXX_COREUTILS_BIN` | macOS 的 Bash 和 GNU coreutils 路径 |
 
-Arduino 侧分别使用 `tools/cpp-cli/toolchain-lock.windows-x86_64.json` 和 `toolchain-lock.macos-arm64.json` 校验工具、运行库和适配脚本摘要。Windows 包内 Python 及引导文件在执行前校验。自行重建后，路径和产物身份均需与宿主锁核对；只修改路径不会改变摘要要求。
+宿主锁由 `sdk/locks/toolchain-lock.windows-x86_64.json` 和 `toolchain-lock.macos-arm64.json` 维护，Arduino 同步到 `tools/stcxx-driver/`。原生驱动校验编译器、头文件和运行库，不加载 Python 或 Shell。自行重建后，路径和产物身份均需与宿主锁核对；只修改路径不会改变摘要要求。
 
 独立适配器可与实际 Arduino 构建的生成 C 进行逐字节比较。在生成这些产物的 Linux/WSL 环境运行以下命令；`--bridge` 可重复指定，每个目录应包含成功构建的 `manifest.json`、IR、原始 C 和存储清单：
 

@@ -9,8 +9,11 @@ C++ -> patched Clang -> LLVM IR -> LLVM-CBE -> audited C adapter -> SDCC
     -> ASxxxx assembler/linker -> Intel HEX firmware
 ```
 
-Plain C goes directly through SDCC. Arduino supplies board configuration,
-startup code, the runtime and the final chip-specific linker layout.
+Plain C goes directly through SDCC. `compiler/` owns the native driver shared
+by standalone builds and Arduino. `sdk/` supplies freestanding runtime sources,
+host locks, chip profiles and startup for `int main(void)`. Arduino supplies
+peripheral APIs and its `setup/loop` lifecycle. See [the SDK guide](sdk/README.md)
+for standalone compilation and complete toolchain packaging.
 
 ## Sources and identity
 
@@ -46,10 +49,12 @@ LLVM and embedded Python archives, PE architecture and DLL dependencies,
 and emits a complete SHA-256 manifest and build provenance. No WSL process
 or Linux executable is used by the Windows Arduino runtime.
 
-Apple Silicon uses the native macOS ARM64 frontend. Both hosts install their
-own native SDCC and frontend packages through the Arduino index. Windows
-ships embedded Python; macOS uses native Bash 4.4+, coreutils and Python 3.
-Host locks and final archive bindings are maintained by `arduino-mcs251`.
+Apple Silicon uses the native macOS ARM64 frontend. The unified package contains
+`bin/stcxx`, `frontend/`, `sdcc/`, and `share/stcxx/sdk/`. Compilation uses native
+executables without a shell or interpreter. The component frontend packaging
+scripts above retain historical maintenance payloads; the native toolchain
+packager excludes them. Canonical host locks live in `sdk/locks`; Arduino
+consumes checked copies and maintains the public release archive bindings.
 
 The current full build scripts run in Linux/WSL and require LLVM 20 development
 files. Use a new absolute build directory:
@@ -121,9 +126,10 @@ before accepting the generated C. Complex aggregate/bitfield operations,
 varargs and weak/COMDAT edge cases remain subject to these checks; accepting
 C++ syntax in Clang alone does not establish a working firmware ABI.
 
-Chip-specific Flash addresses, stack/heap limits and startup behavior belong
-to [arduino-mcs251](../arduino-mcs251/README.md). The existing C++ board profiles
-are experimental. Firmware validation and UART ISP are supplied separately
+Standalone chip-specific Flash addresses and stack/heap limits live in
+`sdk/targets.json`; Arduino's richer device catalog is checked against these
+compiler settings by `scripts/sync-stcxx-sdk.mjs`. Both sets of profiles remain
+experimental. Firmware validation and UART ISP are supplied separately
 by [stc-cli](../stc-cli/README.md).
 
 ## Native ARM64 Mac frontend build

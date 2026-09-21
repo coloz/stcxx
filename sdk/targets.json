@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "id": "stc32g12k128",
+      "model": "STC32G12K128",
+      "macro": "STC32G12K128",
+      "target": "mcs251",
+      "flash_bytes": 131072,
+      "maximum_code_bytes": 131072,
+      "xdata_bytes": 8192,
+      "edata_bytes": 4096,
+      "cpp_heap_bytes": 6144,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "segmented_home",
+        "code_loc": 16711680,
+        "gsinit0_loc": 16646144
+      }
+    },
+    {
+      "id": "stc32g144k246",
+      "model": "STC32G144K246",
+      "macro": "STC32G144K246",
+      "target": "mcs251",
+      "flash_bytes": 251904,
+      "maximum_code_bytes": 251904,
+      "xdata_bytes": 131072,
+      "edata_bytes": 16384,
+      "cpp_heap_bytes": 32768,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000,
+        48000000
+      ],
+      "linker": {
+        "layout": "segmented_home",
+        "code_loc": 16711680,
+        "gsinit0_loc": 16525312
+      }
+    },
+    {
+      "id": "stc32g8k64",
+      "model": "STC32G8K64",
+      "macro": "STC32G8K64",
+      "target": "mcs251",
+      "flash_bytes": 65536,
+      "maximum_code_bytes": 65536,
+      "xdata_bytes": 6144,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 4096,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680
+      }
+    },
+    {
+      "id": "stc32cl8k64",
+      "model": "STC32CL8K64",
+      "macro": "STC32CL8K64",
+      "target": "mcs251",
+      "flash_bytes": 65536,
+      "maximum_code_bytes": 65536,
+      "xdata_bytes": 6144,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 4096,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680
+      }
+    },
+    {
+      "id": "ai8051u_34k64",
+      "model": "AI8051U-34K64",
+      "macro": "AI8051U_34K64",
+      "target": "mcs251",
+      "flash_bytes": 65536,
+      "maximum_code_bytes": 65536,
+      "xdata_bytes": 32768,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 16384,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000,
+        40000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680
+      }
+    },
+    {
+      "id": "stc32g12k64",
+      "model": "STC32G12K64",
+      "macro": "STC32G12K64",
+      "target": "mcs251",
+      "flash_bytes": 65536,
+      "maximum_code_bytes": 65536,
+      "xdata_bytes": 8192,
+      "edata_bytes": 4096,
+      "cpp_heap_bytes": 6144,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680
+      }
+    },
+    {
+      "id": "stc32g8k48",
+      "model": "STC32G8K48",
+      "macro": "STC32G8K48",
+      "target": "mcs251",
+      "flash_bytes": 49152,
+      "maximum_code_bytes": 49152,
+      "xdata_bytes": 6144,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 4096,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680,
+        "flash_loc": 16711680
+      }
+    },
+    {
+      "id": "stc32cl8k48",
+      "model": "STC32CL8K48",
+      "macro": "STC32CL8K48",
+      "target": "mcs251",
+      "flash_bytes": 49152,
+      "maximum_code_bytes": 49152,
+      "xdata_bytes": 6144,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 4096,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680,
+        "flash_loc": 16711680
+      }
+    },
+    {
+      "id": "ai8051u_34k32",
+      "model": "AI8051U-34K32",
+      "macro": "AI8051U_34K32",
+      "target": "mcs251",
+      "flash_bytes": 32768,
+      "maximum_code_bytes": 32768,
+      "xdata_bytes": 32768,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 16384,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680,
+        "flash_loc": 16711680
+      }
+    },
+    {
+      "id": "ai8051u_34k16",
+      "model": "AI8051U-34K16",
+      "macro": "AI8051U_34K16",
+      "target": "mcs251",
+      "flash_bytes": 16384,
+      "maximum_code_bytes": 16384,
+      "xdata_bytes": 32768,
+      "edata_bytes": 2048,
+      "cpp_heap_bytes": 16384,
+      "default_clock_hz": 12000000,
+      "clock_options_hz": [
+        12000000
+      ],
+      "linker": {
+        "layout": "post_home_contiguous",
+        "code_loc": 16711680,
+        "flash_loc": 16711680
+      }
+    }
+  ]
+}
