@@ -315,9 +315,9 @@ impl Driver {
     }
     pub fn headers(&self) -> PathBuf {
         self.platform.join(if self.standalone {
-            "runtime/cpp"
+            "runtime/include"
         } else {
-            "cores/STC/cpp"
+            "cores/STC/runtime/include"
         })
     }
     pub fn call(&self, name: &str, args: &[String], capture: bool) -> Result<Vec<u8>> {

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include "include/stcxx_console.h"
 
 /* Override these hooks in a native C translation unit to connect a UART.
  * Kept in a separate archive member so an application's definitions win. */

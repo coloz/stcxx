@@ -1,7 +1,7 @@
 #ifndef STCXX_HEAP_PRIVATE_H
 #define STCXX_HEAP_PRIVATE_H
 
-#include "cpp/stcxx_allocator.h"
+#include "../include/stcxx_allocator.h"
 
 /* Shared native implementation details, never a C++ ABI boundary.  State
  * stays in its single eight-byte XDATA archive member; the arena object

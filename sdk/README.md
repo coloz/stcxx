@@ -53,6 +53,22 @@ C++ stdio uses native SDCC formatting. To attach console I/O, define
 `int stcxx_console_write(unsigned char)` and `int stcxx_console_read(void)`
 in a native C file. Write returns the emitted byte or EOF; read returns a byte
 or EOF. Default hooks return EOF. `snprintf` needs no console initialization.
+The declarations are in `runtime/include/stcxx_console.h`; include them from
+native C using `#include "include/stcxx_console.h"` with the SDK's runtime root
+on the include path. Arduino supplies its own UART adapter using the same hooks.
+
+Runtime sources live in `runtime/src`, and Clang's freestanding headers live in
+`runtime/include`. The native C compiler must not search `runtime/include`:
+its `math.h`, `ctype.h`, etc. must come from SDCC. Native runtime sources include
+specific shared ABI headers by relative path. `runtime-files.json` schema 2
+owns the inventory and maps it to Arduino's `cores/STC/runtime`; all runtime
+changes are made here first. Rebuild both host drivers after updating this layout.
+
+The CBE adapter preserves requested native `<math.h>` declarations for dynamic
+math calls such as `sqrt`. `runtime/src/stcxx_copysign.c` supplies the binary32
+libcall LLVM can introduce when optimizing `truncf`; it stays native C to avoid
+being optimized back into a call to itself. The implementation preserves
+signed zero, subnormal values, infinities and NaN payloads.
 
 All chip profiles remain experimental. A successful compile verifies compiler
 and link contracts, not peripheral behavior or physical-board qualification.

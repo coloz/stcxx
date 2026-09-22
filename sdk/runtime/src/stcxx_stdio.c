@@ -1,20 +1,13 @@
 /* SPDX-License-Identifier: MIT
  * Native-SDCC formatting boundary: va_list never crosses into Clang IR.
- * Only the C++ stdio facade selects these prefixed symbols. UART operations
- * require the sketch to initialize Serial; no FILE/filesystem is implied.
+ * Only the C++ stdio facade selects these prefixed symbols. The embedding
+ * platform supplies console hooks; this runtime has no Arduino dependency.
  */
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
-#if STCXX_STANDALONE
-int stcxx_console_write(unsigned char value);
-int stcxx_console_read(void);
-#define Serial_write(value) (stcxx_console_write(value) == (int)(unsigned char)(value) ? 1u : 0u)
-#define Serial_read() stcxx_console_read()
-#else
-#include "cpp/stc_c_hal.h"
-#endif
+#include "../include/stcxx_console.h"
 
 typedef struct {
     char *buffer;
@@ -52,7 +45,7 @@ int __stcxx_snprintf(char *buffer, size_t size, const char *format, ...)
 static void stcxx_format_uart(char value, void *opaque) __reentrant
 {
     unsigned char *failed = (unsigned char *)opaque;
-    if (Serial_write((uint8_t)value) != 1u) {
+    if (stcxx_console_write((unsigned char)value) != (int)(unsigned char)value) {
         *failed = 1u;
     }
 }
@@ -74,7 +67,7 @@ int __stcxx_printf(const char *format, ...)
 int __stcxx_putchar(int value)
 {
     unsigned char character = (unsigned char)value;
-    return Serial_write(character) == 1u ? (int)character : EOF;
+    return stcxx_console_write(character) == (int)character ? (int)character : EOF;
 }
 
 int __stcxx_puts(const char *text)
@@ -92,16 +85,5 @@ int __stcxx_puts(const char *text)
 
 int __stcxx_getchar(void)
 {
-#if STCXX_STANDALONE
     return stcxx_console_read();
-#else
-    int result;
-    do {
-        result = Serial_read();
-        if (result < 0) {
-            yield();
-        }
-    } while (result < 0);
-    return result;
-#endif
 }

@@ -1,4 +1,4 @@
-#include "cpp/stcxx_runtime.h"
+#include "include/stcxx_runtime.h"
 
 void __stcxx_heap_init(void);
 int __stcxx_user_main(void);
