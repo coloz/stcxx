@@ -4,7 +4,7 @@ This MIT-licensed Rust crate owns the native C/C++ compilation pipeline,
 LLVM-CBE adaptation, ABI audits, archive handling, linking and packaging.
 `src/main.rs` exposes the standalone `stcxx` command. Arduino's native adapter
 depends on this crate through Cargo, adapts build-system artifacts and recipes,
-and calls the same compiler implementation through `main_entry`.
+and calls the same compiler implementation in process through `run`.
 
 From the STCXX repository root:
 
@@ -25,6 +25,13 @@ common compiler pipeline. The legacy `--platform` interface remains stable for
 Arduino recipes. The only lifecycle difference at the linker roots is
 `int main(void)` versus Arduino's `setup/loop`; ABI, storage and constructor
 validation are shared.
+
+Arduino's prebuild hook starts a fresh toolchain verification session. Jobs in
+that build share a successful full SHA-256 check under an operating system file
+lock, checking expected digests, resolved paths and file metadata before reuse.
+Changed inputs invalidate the receipt; the next build resets it. Standalone
+commands without a prepared session continue to verify all toolchain hashes.
+The session lock requires Rust 1.89 or later.
 
 Runtime and host-lock changes are made in `../sdk` first. Synchronize the
 Arduino package copies with `node ../arduino-mcs251/scripts/sync-stcxx-sdk.mjs`

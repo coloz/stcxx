@@ -32,6 +32,7 @@ pub struct Driver {
     pub stack: BTreeMap<String, String>,
     pub clock: String,
     pub constrained: bool,
+    verification_session: Option<PathBuf>,
 }
 impl Driver {
     pub fn new(
@@ -153,6 +154,7 @@ impl Driver {
             stack: BTreeMap::new(),
             clock: String::new(),
             constrained: false,
+            verification_session: None,
         };
         d.parse()?;
         Ok(d)
@@ -165,6 +167,18 @@ impl Driver {
         let mut target = false;
         let mut args = self.arguments.iter();
         while let Some(a) = args.next() {
+            if let Some(path) = a.strip_prefix("--stcxx-verification-session=") {
+                ensure!(!path.is_empty(), "empty toolchain verification session");
+                let path = absolute(path)?;
+                ensure!(
+                    self.verification_session
+                        .as_ref()
+                        .is_none_or(|old| old == &path),
+                    "conflicting toolchain verification sessions"
+                );
+                self.verification_session = Some(path);
+                continue;
+            }
             if a == "-MF" {
                 self.dependency = Some(absolute(args.next().context("missing -MF destination")?)?);
                 continue;
@@ -308,6 +322,8 @@ impl Driver {
                 );
             }
         }
+        self.arguments
+            .retain(|arg| !arg.starts_with("--stcxx-verification-session="));
         Ok(())
     }
     pub fn tool(&self, name: &str) -> PathBuf {
@@ -324,14 +340,26 @@ impl Driver {
         run(&self.tool(name), args, None, capture, None)
     }
     pub fn verify(&self) -> Result<()> {
-        let mut verifier = HashVerifier::default();
-        self.verify_with(&mut verifier)
+        crate::verification::verify(
+            self.verification_session.as_deref(),
+            &self.verification_inputs()?,
+        )
     }
     pub fn verify_with(&self, verifier: &mut HashVerifier) -> Result<()> {
+        for (path, expected) in self.verification_inputs()? {
+            verifier.check(path, &expected)?;
+        }
+        Ok(())
+    }
+    fn verification_inputs(&self) -> Result<Vec<(PathBuf, String)>> {
+        let mut inputs = Vec::new();
+        let mut add = |path: PathBuf, expected: &str| {
+            inputs.push((path, expected.to_owned()));
+        };
         if let Some(files) = self.lock["frontend_files"].as_object() {
             for (name, expected) in files {
                 safe_relative(name)?;
-                verifier.check(self.frontend.join(name), string(expected)?)?;
+                add(self.frontend.join(name), string(expected)?);
             }
         } else if let Some(expected) = self.lock["frontend_manifest_sha256"].as_str() {
             let manifest = self.frontend.join("SOURCE-MANIFEST.sha256");
@@ -340,27 +368,27 @@ impl Driver {
             } else {
                 self.frontend.join("MANIFEST.sha256")
             };
-            verifier.check(&manifest, expected)?;
+            add(manifest.clone(), expected);
             for line in text(&manifest)?.lines() {
                 let (hash, name) = line.split_once("  ").context("invalid frontend manifest")?;
                 safe_relative(name)?;
                 if name.starts_with("bin/") || name.starts_with("lib/") {
-                    verifier.check(self.frontend.join(name), hash)?;
+                    add(self.frontend.join(name), hash);
                 }
             }
         }
         for name in ["clang", "llvm-link", "opt", "llvm-dis", "llvm-cbe"] {
-            verifier.check(
+            add(
                 self.tool(name),
                 string(&self.lock["tools"][name.replace('-', "_")]["sha256"])?,
-            )?;
+            );
         }
         let root = self.sdcc.parent().unwrap().parent().unwrap();
         for name in ["sdcc", "sdar", "sdas251", "sdld", "sdldmcs251", "sdcpp"] {
-            verifier.check(
+            add(
                 exe(&root.join("bin"), name),
                 string(&self.lock["tools"][name]["sha256"])?,
-            )?;
+            );
         }
         if let Some(files) = self
             .lock
@@ -370,25 +398,25 @@ impl Driver {
         {
             for (name, expected) in files {
                 safe_relative(name)?;
-                verifier.check(root.join(name), string(expected)?)?;
+                add(root.join(name), string(expected)?);
             }
         }
         for (name, key) in [("stddef.h", "stddef_sha256"), ("stdint.h", "stdint_sha256")] {
-            verifier.check(
+            add(
                 self.includes.join(name),
                 string(&self.lock["tools"]["sdcc_inputs"][key])?,
-            )?;
+            );
         }
         for (name, key) in [
             ("libsdcc.lib", "libsdcc_sha256"),
             ("mcs251.lib", "target_runtime_sha256"),
         ] {
-            verifier.check(
+            add(
                 self.runtime.join(name),
                 string(&self.lock["targets"]["mcs251"]["sdcc_inputs"][key])?,
-            )?;
+            );
         }
-        Ok(())
+        Ok(inputs)
     }
     pub fn clang_base(&self) -> Result<Vec<String>> {
         let resource =

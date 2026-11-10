@@ -2,6 +2,7 @@
 name = "stcxx-driver"
 version = "0.3.0"
 edition = "2024"
+rust-version = "1.89"
 license = "MIT"
 description = "Standalone STC MCS251 C/C++ toolchain and Arduino compiler driver"
 

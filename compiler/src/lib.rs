@@ -7,8 +7,9 @@ mod package;
 mod standalone;
 mod trim;
 mod util;
+mod verification;
 use anyhow::{Result, bail, ensure};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use util::*;
 
 fn entry(mut args: Vec<String>) -> Result<()> {
@@ -113,14 +114,44 @@ fn entry(mut args: Vec<String>) -> Result<()> {
         other => bail!("unknown operation: {other}"),
     }
 }
+/// Run compiler arguments in the calling process, without terminating it.
+pub fn run(args: Vec<String>) -> Result<()> {
+    // A previous preprocessing operation may have suppressed command traces.
+    set_command_logging(true);
+    let result = entry(args);
+    set_command_logging(true);
+    result
+}
+
+/// Start a fresh build-scoped toolchain verification session.
+pub fn begin_verification_session(path: &Path) -> Result<()> {
+    verification::begin_session(path)
+}
+
+/// Preserve a compiler subprocess's exit code through adapter error contexts.
+pub fn process_exit_code(error: &anyhow::Error) -> i32 {
+    error
+        .downcast_ref::<ProcessError>()
+        .map(|e| e.0)
+        .unwrap_or(2)
+}
+
 pub fn main_entry() {
-    if let Err(error) = entry(std::env::args().skip(1).collect()) {
+    if let Err(error) = run(std::env::args().skip(1).collect()) {
         eprintln!("stcxx: {error:#}");
-        std::process::exit(
-            error
-                .downcast_ref::<ProcessError>()
-                .map(|e| e.0)
-                .unwrap_or(2),
-        );
+        std::process::exit(process_exit_code(&error));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn library_entry_returns_errors_and_preserves_process_status() {
+        assert!(run(vec!["--platform".into()]).is_err());
+        let error = anyhow::Error::new(ProcessError(7)).context("compiler operation failed");
+        assert_eq!(process_exit_code(&error), 7);
+        assert_eq!(process_exit_code(&anyhow::anyhow!("invalid input")), 2);
     }
 }
