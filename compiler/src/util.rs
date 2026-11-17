@@ -198,6 +198,7 @@ pub fn run(
     capture: bool,
     log: Option<&Path>,
 ) -> Result<Vec<u8>> {
+    crate::backend_paths::check_command(program, args, cwd)?;
     // Normal command traces are build information, not compiler diagnostics.
     // Preprocessor recipes disable them to keep their stdout machine-readable.
     log_command(program, args);
@@ -300,6 +301,7 @@ pub fn safe_relative(name: &str) -> Result<&Path> {
 // Optional analyses must retain diagnostics as evidence without reporting a
 // failed probe as a build error when the original SDCC object remains valid.
 pub fn probe(program: &Path, args: &[String]) -> Result<std::process::Output> {
+    crate::backend_paths::check_command(program, args, None)?;
     log_command(program, args);
     let mut command = Command::new(program);
     command.args(args).stdin(Stdio::null());
@@ -311,9 +313,20 @@ pub fn probe(program: &Path, args: &[String]) -> Result<std::process::Output> {
     Ok(command.output()?)
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    let mut pending = tempfile::NamedTempFile::new_in(path.parent().context("missing parent")?)?;
+    let path = absolute(path)?;
+    let parent = path.parent().context("missing parent")?;
+    fs::create_dir_all(parent)?;
+    // Rust's filesystem calls accept long Windows paths, but tempfile's
+    // persist uses Win32 APIs without adding the extended-length prefix.
+    // Resolve the existing parent so both the temporary source and destination
+    // use that prefix. Keep callers' path spelling out of this internal detail.
+    #[cfg(windows)]
+    let path = parent
+        .canonicalize()?
+        .join(path.file_name().context("missing output name")?);
+    let mut pending = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
     pending.write_all(bytes)?;
-    pending.persist(path).map_err(|e| e.error)?;
+    pending.persist(&path).map_err(|e| e.error)?;
     Ok(())
 }
 pub fn command_flag(args: &[String], flag: &str) -> Result<String> {
@@ -331,6 +344,36 @@ pub fn command_flag(args: &[String], flag: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn atomic_write_replaces_files_and_cleans_failed_temporary_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("new directory/output");
+        atomic_write(&output, b"original").unwrap();
+        atomic_write(&output, b"replacement").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"replacement");
+        let directory = output.parent().unwrap().join("directory");
+        fs::create_dir(&directory).unwrap();
+        assert!(atomic_write(&directory, b"cannot replace a directory").is_err());
+        assert!(directory.is_dir());
+        assert_eq!(fs::read_dir(output.parent().unwrap()).unwrap().count(), 2);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn atomic_write_supports_windows_long_paths() {
+        use std::os::windows::ffi::OsStrExt;
+        let temp = tempfile::tempdir().unwrap();
+        let mut parent = temp.path().to_path_buf();
+        while parent.as_os_str().encode_wide().count() < 280 {
+            parent.push("long directory 中文");
+        }
+        let output = parent.join("output.hex");
+        atomic_write(&output, b"original").unwrap();
+        atomic_write(&output, b"replacement").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"replacement");
+        assert_eq!(fs::read_dir(parent).unwrap().count(), 1);
+    }
+
     #[test]
     fn verification_reuses_hashes_but_checks_every_expectation_and_new_pass() {
         let temp = tempfile::tempdir().unwrap();

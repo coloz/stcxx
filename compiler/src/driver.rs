@@ -183,6 +183,13 @@ impl Driver {
                 self.dependency = Some(absolute(args.next().context("missing -MF destination")?)?);
                 continue;
             }
+            if a == "-MT" || a == "-MQ" {
+                self.clang_args.extend([
+                    a.clone(),
+                    args.next().context("missing dependency target")?.clone(),
+                ]);
+                continue;
+            }
             if let Some(level) = a.strip_prefix("--stcxx-warnings=") {
                 if level == "none" {
                     // The locked SDCC has no -w. setWarningDisabled ignores
@@ -278,7 +285,7 @@ impl Driver {
             .contains(&a.as_str())
             {
                 self.sdcc_args.push(a.clone());
-            } else if ["-M", "-MG", "-MP", "-E", "-dM"].contains(&a.as_str()) {
+            } else if ["-M", "-MM", "-MG", "-MP", "-E", "-dM"].contains(&a.as_str()) {
             } else if a == "-w" || a.starts_with("-W") && !a.starts_with("-Wp") {
                 self.clang_args.push(a.clone());
                 if self.mode == "compile-c" && a != "-w" {
@@ -482,6 +489,87 @@ impl Driver {
     pub fn compile_with(&self, verifier: &mut HashVerifier) -> Result<()> {
         self.verify_with(verifier)?;
         self.compile_inner()
+    }
+    pub fn dependencies(&self) -> Result<Vec<u8>> {
+        self.verify()?;
+        let mode = if self.arguments.iter().any(|flag| flag == "-MM") {
+            "-MM"
+        } else {
+            "-M"
+        };
+        if self
+            .source
+            .extension()
+            .is_some_and(|extension| extension == "c")
+        {
+            let mut args = Vec::new();
+            let mut target = None;
+            let mut flags = self.arguments.iter();
+            while let Some(flag) = flags.next() {
+                if flag == "-MF" {
+                    flags.next();
+                } else if flag == "-MT" || flag == "-MQ" {
+                    let value = flags.next().context("missing dependency target")?;
+                    ensure!(value.is_ascii(), "native C dependency labels must be ASCII");
+                    let value = if flag == "-MQ" {
+                        value
+                            .chars()
+                            .flat_map(|c| match c {
+                                '$' => vec!['$', '$'],
+                                ' ' | '\t' | '#' | '\\' => vec!['\\', c],
+                                _ => vec![c],
+                            })
+                            .collect()
+                    } else {
+                        value.clone()
+                    };
+                    target = Some(value);
+                } else if flag == "-MG" || flag == "-MP" {
+                    args.push(format!("-Wp{flag}"));
+                } else if flag.starts_with("--stcxx-warnings=") {
+                } else if let Some(path) = flag.strip_prefix("-I") {
+                    args.push(format!("-I{}", s(absolute(path)?)));
+                } else {
+                    args.push(flag.clone());
+                }
+            }
+            args.extend([
+                "-E".into(),
+                mode.into(),
+                "-x".into(),
+                "c".into(),
+                s(&self.source),
+            ]);
+            let mut bytes = run(&self.sdcc, &args, self.source.parent(), true, None)?;
+            if let Some(target) = target {
+                let split = bytes
+                    .windows(2)
+                    .position(|p| p[0] == b':' && p[1].is_ascii_whitespace())
+                    .context("missing native C dependency rule")?;
+                let mut restored = target.into_bytes();
+                restored.extend_from_slice(&bytes[split..]);
+                bytes = restored;
+            }
+            Ok(bytes)
+        } else {
+            let mut args = if self
+                .source
+                .extension()
+                .is_some_and(|extension| extension == "S")
+            {
+                let mut args = vec![
+                    format!("--target={}", self.triple),
+                    "-x".into(),
+                    "assembler-with-cpp".into(),
+                ];
+                args.extend(self.clang_args.clone());
+                args
+            } else {
+                self.clang_base()?
+            };
+            args.extend([mode.into(), "-MG".into(), "-MP".into(), s(&self.source)]);
+            self.call("clang", &args, true)
+        }
     }
     fn compile_inner(&self) -> Result<()> {
         if let Some(p) = &self.output {
@@ -835,6 +923,42 @@ pub fn advanced_size(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod dependency_tests {
     use super::*;
+    #[test]
+    fn builder_dependency_target_options_are_accepted_and_require_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source.cpp");
+        fs::write(&source, "int value;\n").unwrap();
+        let sdk = Path::new(env!("CARGO_MANIFEST_DIR")).join("../sdk");
+        let backend = temp.path().join("tools/sdcc/bin/sdcc");
+        let base = vec![
+            "-mmcs251".into(),
+            "-DSTCXX_CPP_CORE=1".into(),
+            "-DF_CPU=12000000L".into(),
+        ];
+        let mut flags = base.clone();
+        flags.extend(["-E".into(), "-M".into(), "-MT".into(), "aily-deps".into()]);
+        let driver =
+            Driver::standalone(sdk.clone(), &s(&backend), &s(&source), "nul", "re11", flags)
+                .unwrap();
+        assert!(
+            driver
+                .clang_args
+                .windows(2)
+                .any(|pair| pair == ["-MT", "aily-deps"])
+        );
+        for option in ["-MT", "-MQ"] {
+            let mut flags = base.clone();
+            flags.push(option.into());
+            assert!(
+                Driver::standalone(sdk.clone(), &s(&backend), &s(&source), "nul", "re11", flags)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("missing dependency target")
+            );
+        }
+    }
+
     #[test]
     fn c_dependencies_preserve_path_spelling_and_make_escaping() {
         let prerequisites = ": \\\n C:/中文\\ path/source.c \\\n C:/headers/value.h\n";

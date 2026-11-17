@@ -1,5 +1,6 @@
 mod adapter;
 mod artifact;
+pub mod backend_paths;
 mod cache;
 mod driver;
 mod link;
@@ -126,6 +127,40 @@ pub fn run(args: Vec<String>) -> Result<()> {
 /// Start a fresh build-scoped toolchain verification session.
 pub fn begin_verification_session(path: &Path) -> Result<()> {
     verification::begin_session(path)
+}
+
+/// Atomically replace a file, including at extended-length Windows paths.
+pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    util::atomic_write(path, bytes)
+}
+
+/// Capture dependency output for build systems that derive preprocessing from
+/// the ordinary compilation recipe instead of invoking the preproc recipe.
+pub fn preprocess_dependencies(
+    platform: &Path,
+    backend: &str,
+    source: &Path,
+    arguments: Vec<String>,
+) -> Result<Vec<u8>> {
+    set_command_logging(false);
+    let result = (|| {
+        let marker = if source.extension().is_some_and(|extension| extension == "S") {
+            "re3"
+        } else {
+            "re11"
+        };
+        driver::Driver::new(
+            platform.to_path_buf(),
+            backend,
+            &s(source),
+            "nul",
+            marker,
+            arguments,
+        )?
+        .dependencies()
+    })();
+    set_command_logging(true);
+    result
 }
 
 /// Preserve a compiler subprocess's exit code through adapter error contexts.

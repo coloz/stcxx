@@ -591,12 +591,16 @@ pub fn trim(d: &Driver, arguments: &[String], work: &Path) -> Result<Vec<String>
         for ((start, end), replacement) in edits.into_iter().rev() {
             generated.splice(start..end, replacement.bytes());
         }
+        let mut located =
+            format!("#line 1 {}\n", serde_json::to_string(&s(&unit.source))?).into_bytes();
+        located.extend(generated);
+        let generated = located;
         let directory = work
             .join("native-source-closure")
             .join(&digest(s(&unit.original))[..16]);
         fs::create_dir_all(&directory)?;
-        let source = directory.join(unit.source.file_name().unwrap());
-        let rel = directory.join(unit.original.file_name().unwrap());
+        let source = directory.join("source.c");
+        let rel = directory.join("source.rel");
         let flags = unit
             .meta
             .get("sdcc_flags")

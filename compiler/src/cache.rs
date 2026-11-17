@@ -114,7 +114,7 @@ pub fn archive(sdar: &Path, archive: &Path, object: &Path, flags: &[String]) -> 
     if rel.file_name().is_none_or(|n| n != "stcxx_heap.c.rel") {
         let mut argv = flags.to_vec();
         argv.extend([s(&library), s(&rel)]);
-        run(&sdar, &argv, None, false, None)?;
+        run(&sdar, &argv, library.parent(), false, None)?;
     }
     files.insert(
         "core.lib".into(),

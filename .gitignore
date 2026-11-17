@@ -13,7 +13,10 @@
 /sdcc-mcs251-windows-x64-*.zip
 __pycache__/
 *.pyc
+# Rust driver binaries, intermediate files and collected dependency notices.
 /compiler/target/
-/.build/
 /compiler/LICENSES/
+# Local verification outputs and temporary build environments.
+/.build/
+# Release archives, staging directories and generated reports.
 /dist/
